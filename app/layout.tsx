@@ -13,8 +13,21 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://rodmo-family-calendar.sliph320.chatgpt.site'),
   title: 'Together — Family Calendar',
   description: 'A calm, shared three-day calendar for the whole family.',
+  openGraph: {
+    title: 'Together — Family Calendar',
+    description: 'A calm, shared three-day calendar for the whole family.',
+    type: 'website',
+    images: [{ url: '/og.png', width: 1732, height: 909, alt: 'Together family calendar' }],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Together — Family Calendar',
+    description: 'A calm, shared three-day calendar for the whole family.',
+    images: ['/og.png'],
+  },
 };
 
 export default function RootLayout({

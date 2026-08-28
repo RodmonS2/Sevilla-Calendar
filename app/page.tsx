@@ -49,11 +49,6 @@ function toDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function fromDateKey(key: string) {
-  const [year, month, day] = key.split('-').map(Number);
-  return new Date(year, month - 1, day, 12);
-}
-
 function timeToMinutes(time: string) {
   const [hours, minutes] = time.split(':').map(Number);
   return hours * 60 + minutes;
@@ -69,10 +64,6 @@ function formatTime(time: string) {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function roundToHalfHour(minutes: number) {
-  return Math.round(minutes / 30) * 30;
 }
 
 function defaultDraft(date = new Date(), hour = 9): EditorDraft {
