@@ -16,9 +16,18 @@ create table if not exists public.calendar_events (
   updated_at timestamptz not null default now(),
   constraint calendar_events_valid_time check (end_time > start_time),
   constraint calendar_events_valid_participants check (
-    participant_ids <@ array['mom', 'dad', 'marra', 'bella']::text[]
+    participant_ids <@ array['mom', 'dad', 'marra', 'bella', 'lola']::text[]
   )
 );
+
+-- Keep existing installations aligned when the family list changes.
+alter table public.calendar_events
+  drop constraint if exists calendar_events_valid_participants;
+
+alter table public.calendar_events
+  add constraint calendar_events_valid_participants check (
+    participant_ids <@ array['mom', 'dad', 'marra', 'bella', 'lola']::text[]
+  );
 
 create or replace function public.set_calendar_event_updated_at()
 returns trigger

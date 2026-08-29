@@ -46,6 +46,7 @@ const FAMILY: FamilyMember[] = [
   { id: 'dad', name: 'Dad', color: '#4C91E8', tint: '#E7F1FD', ink: '#225A9D', initial: 'D' },
   { id: 'marra', name: 'Marra', color: '#F080AE', tint: '#FCE8F0', ink: '#964264', initial: 'M' },
   { id: 'bella', name: 'Bella', color: '#F5BD4D', tint: '#FFF4D6', ink: '#7A5511', initial: 'B' },
+  { id: 'lola', name: 'Lola', color: '#78C9A3', tint: '#E5F6EC', ink: '#2F6B52', initial: 'L' },
 ];
 
 const HOURS = Array.from({ length: 23 }, (_, index) => index + 1);
@@ -120,7 +121,7 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday }: {
   viewMode: CalendarViewMode;
   anchorDate: Date;
   activeIds: Set<string>;
@@ -128,6 +129,7 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
   onToggleFamily: (id: string) => void;
   onSelectMonth: (month: number) => void;
   onSelectYear: (year: number) => void;
+  onToday: () => void;
 }) {
   const [openPicker, setOpenPicker] = useState<'view' | 'month' | 'year' | null>(null);
   const headerRef = useRef<HTMLElement>(null);
@@ -182,6 +184,9 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
           </div>
         )}
       </div>
+      <button type="button" className="today-button" onClick={onToday} aria-label="Go to today">
+        Today
+      </button>
       <div className="header-date-selectors">
         <div className="month-selector">
           <button
@@ -875,6 +880,11 @@ export default function FamilyCalendar() {
         onToggleFamily={toggleFilter}
         onSelectMonth={(month) => setAnchorDate((current) => new Date(current.getFullYear(), month, 1, 12))}
         onSelectYear={(year) => setAnchorDate(new Date(year, 0, 1, 12))}
+        onToday={() => {
+          const currentDate = new Date();
+          currentDate.setHours(12, 0, 0, 0);
+          setAnchorDate(currentDate);
+        }}
       />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">
