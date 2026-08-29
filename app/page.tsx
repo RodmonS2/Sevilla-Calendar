@@ -58,6 +58,7 @@ const VIEW_OPTIONS: { id: CalendarViewMode; label: string }[] = [
   { id: 'three-day', label: '3 Day' },
   { id: 'month', label: 'Month' },
 ];
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 function addDays(date: Date, amount: number) {
   const next = new Date(date);
@@ -119,23 +120,27 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear }: {
   viewMode: CalendarViewMode;
   anchorDate: Date;
   activeIds: Set<string>;
   onViewModeChange: (mode: CalendarViewMode) => void;
   onToggleFamily: (id: string) => void;
+  onSelectMonth: (month: number) => void;
+  onSelectYear: (year: number) => void;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [openPicker, setOpenPicker] = useState<'view' | 'month' | 'year' | null>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const selectedYear = anchorDate.getFullYear();
+  const yearOptions = Array.from({ length: 11 }, (_, index) => selectedYear - 5 + index);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!openPicker) return;
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+      if (!headerRef.current?.contains(event.target as Node)) setOpenPicker(null);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuOpen(false);
+      if (event.key === 'Escape') setOpenPicker(null);
     };
     window.addEventListener('pointerdown', closeOnOutsideClick);
     window.addEventListener('keydown', closeOnEscape);
@@ -143,22 +148,22 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
       window.removeEventListener('pointerdown', closeOnOutsideClick);
       window.removeEventListener('keydown', closeOnEscape);
     };
-  }, [menuOpen]);
+  }, [openPicker]);
 
   return (
-    <header className="topbar">
-      <div className="view-menu" ref={menuRef}>
+    <header className="topbar" ref={headerRef}>
+      <div className="view-menu">
         <button
           type="button"
           className="menu-button"
           aria-label="Choose calendar view"
           aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen((open) => !open)}
+          aria-expanded={openPicker === 'view'}
+          onClick={() => setOpenPicker((open) => open === 'view' ? null : 'view')}
         >
           <span className="hamburger-icon" aria-hidden="true"><i /><i /><i /></span>
         </button>
-        {menuOpen && (
+        {openPicker === 'view' && (
           <div className="view-dropdown" role="menu" aria-label="Calendar views">
             <p>Calendar view</p>
             {VIEW_OPTIONS.map((option) => (
@@ -167,7 +172,7 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
                 role="menuitemradio"
                 aria-checked={viewMode === option.id}
                 className={viewMode === option.id ? 'active' : ''}
-                onClick={() => { onViewModeChange(option.id); setMenuOpen(false); }}
+                onClick={() => { onViewModeChange(option.id); setOpenPicker(null); }}
                 key={option.id}
               >
                 <span>{option.label}</span>
@@ -177,9 +182,65 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
           </div>
         )}
       </div>
-      <span className="header-month">{anchorDate.toLocaleDateString('en-US', { month: 'short' })}</span>
+      <div className="header-date-selectors">
+        <div className="month-selector">
+          <button
+            type="button"
+            className="header-month"
+            aria-label={`Choose month, currently ${MONTHS[anchorDate.getMonth()]}`}
+            aria-haspopup="menu"
+            aria-expanded={openPicker === 'month'}
+            onClick={() => setOpenPicker((open) => open === 'month' ? null : 'month')}
+          >
+            {MONTHS[anchorDate.getMonth()]}
+          </button>
+          {openPicker === 'month' && (
+            <div className="month-picker" role="menu" aria-label="Choose month">
+              {MONTHS.map((month, index) => (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={anchorDate.getMonth() === index}
+                  className={anchorDate.getMonth() === index ? 'active' : ''}
+                  onClick={() => { onSelectMonth(index); setOpenPicker(null); }}
+                  key={month}
+                >
+                  {month}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="year-selector">
+          <button
+            type="button"
+            className="header-year"
+            aria-label={`Choose year, currently ${selectedYear}`}
+            aria-haspopup="menu"
+            aria-expanded={openPicker === 'year'}
+            onClick={() => setOpenPicker((open) => open === 'year' ? null : 'year')}
+          >
+            {selectedYear}
+          </button>
+          {openPicker === 'year' && (
+            <div className="year-picker" role="menu" aria-label="Choose year">
+              {yearOptions.map((year) => (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selectedYear === year}
+                  className={selectedYear === year ? 'active' : ''}
+                  onClick={() => { onSelectYear(year); setOpenPicker(null); }}
+                  key={year}
+                >
+                  {year}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
       <FamilyLegend activeIds={activeIds} onToggle={onToggleFamily} />
-      <span className="header-year">{anchorDate.getFullYear()}</span>
     </header>
   );
 }
@@ -214,12 +275,11 @@ function TimeColumn() {
   );
 }
 
-function CalendarEventCard({ event, activeIds, onOpen, hourHeight, layout }: {
+function CalendarEventCard({ event, activeIds, onOpen, hourHeight }: {
   event: CalendarEvent;
   activeIds: Set<string>;
   onOpen: (event: CalendarEvent) => void;
   hourHeight: number;
-  layout: 'day' | 'three-day';
 }) {
   const participants = event.participantIds.map((id) => FAMILY.find((member) => member.id === id)).filter(Boolean) as FamilyMember[];
   const single = participants.length === 1 ? participants[0] : null;
@@ -231,7 +291,7 @@ function CalendarEventCard({ event, activeIds, onOpen, hourHeight, layout }: {
 
   return (
     <button
-      className={`calendar-event ${layout === 'day' ? 'horizontal-event' : ''} ${single ? 'single-person' : 'multi-person'} ${visible ? '' : 'filtered'}`}
+      className={`calendar-event compact-event ${single ? 'single-person' : 'multi-person'} ${visible ? '' : 'filtered'}`}
       style={{
         top,
         height,
@@ -242,35 +302,21 @@ function CalendarEventCard({ event, activeIds, onOpen, hourHeight, layout }: {
       onClick={(clickEvent) => { clickEvent.stopPropagation(); onOpen(event); }}
       aria-label={`${event.title}, ${formatTime(event.startTime)} to ${formatTime(event.endTime)}, ${participants.map((person) => person.name).join(' and ')}`}
     >
-      {layout === 'day' ? (
-        <>
-          {!single && <span className="event-dots" aria-hidden="true">{participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}</span>}
-          <span className="event-time">{formatTime(event.startTime)}–{formatTime(event.endTime)}</span>
-          <span className="event-divider" aria-hidden="true" />
-          <strong>{event.title}</strong>
-          <span className="event-divider" aria-hidden="true" />
-          <span className="event-people">{participants.map((person) => person.name).join(' + ')}</span>
-        </>
-      ) : (
-        <>
-          {!single && <span className="event-dots" aria-hidden="true">{participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}</span>}
-          <strong>{event.title}</strong>
-          <span className="event-time">{formatTime(event.startTime)}–{formatTime(event.endTime)}</span>
-          <span className="event-people">{participants.map((person) => person.name).join(' + ')}</span>
-        </>
-      )}
+      <span className="event-participants" aria-hidden="true">
+        {participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}
+      </span>
+      <strong>{event.title}</strong>
     </button>
   );
 }
 
-function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot, hourHeight, layout }: {
+function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot, hourHeight }: {
   date: Date;
   events: CalendarEvent[];
   activeIds: Set<string>;
   onOpenEvent: (event: CalendarEvent) => void;
   onEmptySlot: (date: Date, hour: number) => void;
   hourHeight: number;
-  layout: 'day' | 'three-day';
 }) {
   const isToday = toDateKey(date) === toDateKey(new Date());
   return (
@@ -284,7 +330,7 @@ function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot, hourHeig
         />
       ))}
       {events.map((event) => (
-        <CalendarEventCard event={event} activeIds={activeIds} onOpen={onOpenEvent} hourHeight={hourHeight} layout={layout} key={event.id} />
+        <CalendarEventCard event={event} activeIds={activeIds} onOpen={onOpenEvent} hourHeight={hourHeight} key={event.id} />
       ))}
     </div>
   );
@@ -325,7 +371,6 @@ function TimelineView({ mode, days, events, activeIds, scrollRef, onOpenEvent, o
               <div className={`date-heading ${isToday ? 'is-today' : ''}`} key={toDateKey(date)}>
                 <span>{date.toLocaleDateString('en-US', { weekday: 'short' })}</span>
                 <strong className="date-number">{date.getDate()}</strong>
-                {mode === 'day' && <small>{date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</small>}
               </div>
             );
           })}
@@ -340,7 +385,6 @@ function TimelineView({ mode, days, events, activeIds, scrollRef, onOpenEvent, o
               onOpenEvent={onOpenEvent}
               onEmptySlot={onEmptySlot}
               hourHeight={hourHeight}
-              layout={mode}
               key={toDateKey(date)}
             />
           ))}
@@ -829,6 +873,8 @@ export default function FamilyCalendar() {
         activeIds={activeIds}
         onViewModeChange={setViewMode}
         onToggleFamily={toggleFilter}
+        onSelectMonth={(month) => setAnchorDate((current) => new Date(current.getFullYear(), month, 1, 12))}
+        onSelectYear={(year) => setAnchorDate(new Date(year, 0, 1, 12))}
       />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">
