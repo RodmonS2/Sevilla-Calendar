@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 
@@ -24,6 +24,7 @@ type CalendarEvent = {
 };
 
 type EditorDraft = Omit<CalendarEvent, 'id'> & { id?: string };
+type CalendarViewMode = 'day' | 'three-day' | 'month';
 
 type DatabaseCalendarEvent = {
   id: string;
@@ -48,14 +49,25 @@ const FAMILY: FamilyMember[] = [
 ];
 
 const HOURS = Array.from({ length: 23 }, (_, index) => index + 1);
-const HOUR_HEIGHT = 72;
-const DAY_WINDOW = 11;
-const LEAD_DAYS = 4;
+const HOUR_HEIGHT: Record<Exclude<CalendarViewMode, 'month'>, number> = {
+  day: 40,
+  'three-day': 38,
+};
+const VIEW_OPTIONS: { id: CalendarViewMode; label: string }[] = [
+  { id: 'day', label: 'Day' },
+  { id: 'three-day', label: '3 Day' },
+  { id: 'month', label: 'Month' },
+];
 
 function addDays(date: Date, amount: number) {
   const next = new Date(date);
   next.setHours(12, 0, 0, 0);
   next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function addMonths(date: Date, amount: number) {
+  const next = new Date(date.getFullYear(), date.getMonth() + amount, 1, 12);
   return next;
 }
 
@@ -107,7 +119,9 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ onPrevious, onNext, onToday, accountName, accountColor, onSignOut }: {
+function CalendarHeader({ viewMode, onViewModeChange, onPrevious, onNext, onToday, accountName, accountColor, onSignOut }: {
+  viewMode: CalendarViewMode;
+  onViewModeChange: (mode: CalendarViewMode) => void;
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -115,16 +129,63 @@ function CalendarHeader({ onPrevious, onNext, onToday, accountName, accountColor
   accountColor: string;
   onSignOut: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', closeOnOutsideClick);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsideClick);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  const stepLabel = viewMode === 'day' ? 'day' : viewMode === 'three-day' ? '3 days' : 'month';
+
   return (
     <header className="topbar">
-      <div>
-        <p className="eyebrow">Family calendar</p>
-        <h1>Our days, together.</h1>
+      <div className="view-menu" ref={menuRef}>
+        <button
+          type="button"
+          className="menu-button"
+          aria-label="Choose calendar view"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <span className="hamburger-icon" aria-hidden="true"><i /><i /><i /></span>
+        </button>
+        {menuOpen && (
+          <div className="view-dropdown" role="menu" aria-label="Calendar views">
+            <p>Calendar view</p>
+            {VIEW_OPTIONS.map((option) => (
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={viewMode === option.id}
+                className={viewMode === option.id ? 'active' : ''}
+                onClick={() => { onViewModeChange(option.id); setMenuOpen(false); }}
+                key={option.id}
+              >
+                <span>{option.label}</span>
+                <i aria-hidden="true">{viewMode === option.id ? '✓' : ''}</i>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <nav className="calendar-actions" aria-label="Calendar navigation">
-        <button aria-label="Previous day" className="icon-button" onClick={onPrevious}>←</button>
+        {viewMode !== 'month' && <button aria-label={`Previous ${stepLabel}`} className="icon-button" onClick={onPrevious}>←</button>}
         <button className="today-button" onClick={onToday}>Today</button>
-        <button aria-label="Next day" className="icon-button" onClick={onNext}>→</button>
+        {viewMode !== 'month' && <button aria-label={`Next ${stepLabel}`} className="icon-button" onClick={onNext}>→</button>}
         <div className="account-menu">
           <span className="account-avatar" style={{ backgroundColor: accountColor }}>{accountName.charAt(0)}</span>
           <span className="account-name">{accountName}</span>
@@ -142,7 +203,7 @@ function FamilyLegend({ activeIds, onToggle }: { activeIds: Set<string>; onToggl
         const active = activeIds.has(member.id);
         return (
           <button
-            className={`family-avatar-button ${active ? 'active' : 'inactive'}`}
+            className={`family-filter ${active ? 'active' : 'inactive'}`}
             style={{ '--member-color': member.color, '--member-tint': member.tint } as React.CSSProperties}
             aria-pressed={active}
             aria-label={`${active ? 'Hide' : 'Show'} ${member.name}'s events`}
@@ -151,7 +212,7 @@ function FamilyLegend({ activeIds, onToggle }: { activeIds: Set<string>; onToggl
             key={member.id}
           >
             <span className="family-avatar" style={{ backgroundColor: active ? member.color : undefined }}>{member.initial}</span>
-            <span className="sr-only">{member.name}</span>
+            <span className="family-name">{member.name}</span>
           </button>
         );
       })}
@@ -167,18 +228,24 @@ function TimeColumn() {
   );
 }
 
-function CalendarEventCard({ event, activeIds, onOpen }: { event: CalendarEvent; activeIds: Set<string>; onOpen: (event: CalendarEvent) => void }) {
+function CalendarEventCard({ event, activeIds, onOpen, hourHeight, layout }: {
+  event: CalendarEvent;
+  activeIds: Set<string>;
+  onOpen: (event: CalendarEvent) => void;
+  hourHeight: number;
+  layout: 'day' | 'three-day';
+}) {
   const participants = event.participantIds.map((id) => FAMILY.find((member) => member.id === id)).filter(Boolean) as FamilyMember[];
   const single = participants.length === 1 ? participants[0] : null;
   const visible = event.participantIds.some((id) => activeIds.has(id));
   const start = timeToMinutes(event.startTime);
   const duration = Math.max(timeToMinutes(event.endTime) - start, 30);
-  const top = Math.max(0, ((start - 60) / 60) * HOUR_HEIGHT);
-  const height = Math.max(34, (duration / 60) * HOUR_HEIGHT - 3);
+  const top = Math.max(0, ((start - 60) / 60) * hourHeight);
+  const height = Math.max(28, (duration / 60) * hourHeight - 2);
 
   return (
     <button
-      className={`calendar-event ${single ? 'single-person' : 'multi-person'} ${visible ? '' : 'filtered'}`}
+      className={`calendar-event ${layout === 'day' ? 'horizontal-event' : ''} ${single ? 'single-person' : 'multi-person'} ${visible ? '' : 'filtered'}`}
       style={{
         top,
         height,
@@ -189,24 +256,35 @@ function CalendarEventCard({ event, activeIds, onOpen }: { event: CalendarEvent;
       onClick={(clickEvent) => { clickEvent.stopPropagation(); onOpen(event); }}
       aria-label={`${event.title}, ${formatTime(event.startTime)} to ${formatTime(event.endTime)}, ${participants.map((person) => person.name).join(' and ')}`}
     >
-      {!single && (
-        <span className="event-dots" aria-hidden="true">
-          {participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}
-        </span>
+      {layout === 'day' ? (
+        <>
+          {!single && <span className="event-dots" aria-hidden="true">{participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}</span>}
+          <span className="event-time">{formatTime(event.startTime)}–{formatTime(event.endTime)}</span>
+          <span className="event-divider" aria-hidden="true" />
+          <strong>{event.title}</strong>
+          <span className="event-divider" aria-hidden="true" />
+          <span className="event-people">{participants.map((person) => person.name).join(' + ')}</span>
+        </>
+      ) : (
+        <>
+          {!single && <span className="event-dots" aria-hidden="true">{participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}</span>}
+          <strong>{event.title}</strong>
+          <span className="event-time">{formatTime(event.startTime)}–{formatTime(event.endTime)}</span>
+          <span className="event-people">{participants.map((person) => person.name).join(' + ')}</span>
+        </>
       )}
-      <strong>{event.title}</strong>
-      <span className="event-time">{formatTime(event.startTime)}–{formatTime(event.endTime)}</span>
-      <span className="event-people">{participants.map((person) => person.name).join(' + ')}</span>
     </button>
   );
 }
 
-function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot }: {
+function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot, hourHeight, layout }: {
   date: Date;
   events: CalendarEvent[];
   activeIds: Set<string>;
   onOpenEvent: (event: CalendarEvent) => void;
   onEmptySlot: (date: Date, hour: number) => void;
+  hourHeight: number;
+  layout: 'day' | 'three-day';
 }) {
   const isToday = toDateKey(date) === toDateKey(new Date());
   return (
@@ -220,27 +298,40 @@ function DayColumn({ date, events, activeIds, onOpenEvent, onEmptySlot }: {
         />
       ))}
       {events.map((event) => (
-        <CalendarEventCard event={event} activeIds={activeIds} onOpen={onOpenEvent} key={event.id} />
+        <CalendarEventCard event={event} activeIds={activeIds} onOpen={onOpenEvent} hourHeight={hourHeight} layout={layout} key={event.id} />
       ))}
     </div>
   );
 }
 
-function ThreeDayView({ days, events, activeIds, scrollRef, onOpenEvent, onEmptySlot, onScroll, onPointerDown }: {
+function TimelineView({ mode, days, events, activeIds, scrollRef, onOpenEvent, onEmptySlot, onPointerDown, onPointerUp, onPointerCancel, onWheel, onClickCapture }: {
+  mode: 'day' | 'three-day';
   days: Date[];
   events: CalendarEvent[];
   activeIds: Set<string>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onOpenEvent: (event: CalendarEvent) => void;
   onEmptySlot: (date: Date, hour: number) => void;
-  onScroll: () => void;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: () => void;
+  onWheel: (event: ReactWheelEvent<HTMLDivElement>) => void;
+  onClickCapture: (event: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const todayKey = toDateKey(new Date());
+  const hourHeight = HOUR_HEIGHT[mode];
   return (
-    <section className="calendar-card" aria-label="Family calendar">
-      <div className="calendar-scroll" ref={scrollRef} onScroll={onScroll} onPointerDown={onPointerDown}>
-        <div className="date-header calendar-columns">
+    <section className={`calendar-card timeline-card ${mode === 'day' ? 'day-view' : 'three-day-view'}`} aria-label={`${mode === 'day' ? 'Day' : '3 day'} family calendar`}>
+      <div
+        className="calendar-scroll"
+        ref={scrollRef}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onWheel={onWheel}
+        onClickCapture={onClickCapture}
+      >
+        <div className="date-header timeline-columns" style={{ '--visible-days': days.length } as React.CSSProperties}>
           <div className="time-heading">Time</div>
           {days.map((date) => {
             const isToday = toDateKey(date) === todayKey;
@@ -248,11 +339,12 @@ function ThreeDayView({ days, events, activeIds, scrollRef, onOpenEvent, onEmpty
               <div className={`date-heading ${isToday ? 'is-today' : ''}`} key={toDateKey(date)}>
                 <span>{date.toLocaleDateString('en-US', { weekday: 'short' })}</span>
                 <strong className="date-number">{date.getDate()}</strong>
+                {mode === 'day' && <small>{date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</small>}
               </div>
             );
           })}
         </div>
-        <div className="calendar-grid calendar-columns">
+        <div className="calendar-grid timeline-columns" style={{ '--visible-days': days.length, '--hour-height': `${hourHeight}px` } as React.CSSProperties}>
           <TimeColumn />
           {days.map((date) => (
             <DayColumn
@@ -261,12 +353,87 @@ function ThreeDayView({ days, events, activeIds, scrollRef, onOpenEvent, onEmpty
               activeIds={activeIds}
               onOpenEvent={onOpenEvent}
               onEmptySlot={onEmptySlot}
+              hourHeight={hourHeight}
+              layout={mode}
               key={toDateKey(date)}
             />
           ))}
         </div>
       </div>
-      <p className="scroll-hint">Swipe or drag to move through days</p>
+    </section>
+  );
+}
+
+function MonthEvent({ event, activeIds, onOpen }: { event: CalendarEvent; activeIds: Set<string>; onOpen: (event: CalendarEvent) => void }) {
+  const participants = event.participantIds.map((id) => FAMILY.find((member) => member.id === id)).filter(Boolean) as FamilyMember[];
+  const single = participants.length === 1 ? participants[0] : null;
+  const visible = event.participantIds.some((id) => activeIds.has(id));
+  return (
+    <button
+      type="button"
+      className={`month-event ${single ? 'single-person' : 'multi-person'} ${visible ? '' : 'filtered'}`}
+      style={{
+        '--event-color': single?.color ?? '#B8BBC1',
+        '--event-tint': single?.tint ?? '#F4F4F2',
+        '--event-ink': single?.ink ?? '#30343B',
+      } as React.CSSProperties}
+      onClick={() => onOpen(event)}
+      title={`${formatTime(event.startTime)} · ${event.title} · ${participants.map((person) => person.name).join(' + ')}`}
+    >
+      {!single && <span className="event-dots" aria-hidden="true">{participants.map((person) => <i key={person.id} style={{ backgroundColor: person.color }} />)}</span>}
+      <span>{event.title}</span>
+    </button>
+  );
+}
+
+function MonthView({ anchorDate, events, activeIds, onPrevious, onNext, onOpenEvent, onEmptyDate }: {
+  anchorDate: Date;
+  events: CalendarEvent[];
+  activeIds: Set<string>;
+  onPrevious: () => void;
+  onNext: () => void;
+  onOpenEvent: (event: CalendarEvent) => void;
+  onEmptyDate: (date: Date) => void;
+}) {
+  const firstOfMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1, 12);
+  const gridStart = addDays(firstOfMonth, -firstOfMonth.getDay());
+  const daysInMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0).getDate();
+  const cellCount = firstOfMonth.getDay() + daysInMonth <= 35 ? 35 : 42;
+  const gridDays = Array.from({ length: cellCount }, (_, index) => addDays(gridStart, index));
+  const todayKey = toDateKey(new Date());
+
+  return (
+    <section className="calendar-card month-card" aria-label="Month family calendar">
+      <div className="month-navigation">
+        <button type="button" aria-label="Previous month" onClick={onPrevious}>‹</button>
+        <h2>{anchorDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h2>
+        <button type="button" aria-label="Next month" onClick={onNext}>›</button>
+      </div>
+      <div className="month-weekdays" aria-hidden="true">
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
+      </div>
+      <div className="month-grid">
+        {gridDays.map((date) => {
+          const dateKey = toDateKey(date);
+          const inMonth = date.getMonth() === anchorDate.getMonth();
+          const dayEvents = events.filter((event) => event.date === dateKey);
+          return (
+            <div className={`month-day ${inMonth ? '' : 'outside-month'} ${dateKey === todayKey ? 'is-today' : ''}`} key={dateKey}>
+              <button
+                type="button"
+                className="month-add-target"
+                aria-label={`Add event on ${date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+                onClick={() => onEmptyDate(date)}
+              >
+                <span>{date.getDate()}</span>
+              </button>
+              <div className="month-events">
+                {dayEvents.map((event) => <MonthEvent event={event} activeIds={activeIds} onOpen={onOpenEvent} key={event.id} />)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -447,6 +614,7 @@ export default function FamilyCalendar() {
     return date;
   }, []);
   const [anchorDate, setAnchorDate] = useState(today);
+  const [viewMode, setViewMode] = useState<CalendarViewMode>('three-day');
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [activeIds, setActiveIds] = useState(() => new Set(FAMILY.map((member) => member.id)));
   const [draft, setDraft] = useState<EditorDraft | null>(null);
@@ -457,10 +625,13 @@ export default function FamilyCalendar() {
   const [dataError, setDataError] = useState('');
   const [saving, setSaving] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const initializedRef = useRef(false);
-  const recenteringRef = useRef(false);
-  const dragRef = useRef<{ x: number; scrollLeft: number } | null>(null);
-  const days = useMemo(() => Array.from({ length: DAY_WINDOW }, (_, index) => addDays(anchorDate, index - LEAD_DAYS)), [anchorDate]);
+  const swipeRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  const suppressClickUntilRef = useRef(0);
+  const lastWheelNavigationRef = useRef(0);
+  const days = useMemo(
+    () => viewMode === 'day' ? [anchorDate] : [anchorDate, addDays(anchorDate, 1), addDays(anchorDate, 2)],
+    [anchorDate, viewMode],
+  );
   const accountEmail = session?.user.email?.toLowerCase() ?? '';
   const account = ALLOWED_ACCOUNTS[accountEmail];
   const accountMember = FAMILY.find((member) => member.id === account?.familyId);
@@ -529,22 +700,13 @@ export default function FamilyCalendar() {
     };
   }, [session, loadEvents]);
 
-  const getDayWidth = () => {
-    const scroller = scrollRef.current;
-    if (!scroller) return 280;
-    const timeWidth = window.innerWidth <= 700 ? 64 : 82;
-    return Math.max(window.innerWidth <= 700 ? 190 : 240, (scroller.clientWidth - timeWidth) / 3);
-  };
-
   useEffect(() => {
     const scroller = scrollRef.current;
-    if (!scroller || initializedRef.current) return;
-    initializedRef.current = true;
+    if (!scroller || viewMode === 'month') return;
     requestAnimationFrame(() => {
-      scroller.scrollLeft = LEAD_DAYS * getDayWidth();
-      scroller.scrollTop = 7.75 * HOUR_HEIGHT;
+      scroller.scrollTop = 4 * HOUR_HEIGHT[viewMode];
     });
-  }, [session]);
+  }, [session, viewMode]);
 
   useEffect(() => {
     if (!draft) return;
@@ -553,54 +715,55 @@ export default function FamilyCalendar() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [draft]);
 
-  const moveByDays = (amount: number) => {
-    setAnchorDate((current) => addDays(current, amount));
+  const moveCalendar = (direction: -1 | 1) => {
+    setAnchorDate((current) => {
+      if (viewMode === 'month') return addMonths(current, direction);
+      return addDays(current, direction * (viewMode === 'three-day' ? 3 : 1));
+    });
   };
 
   const returnToday = () => {
     setAnchorDate(today);
-    requestAnimationFrame(() => {
-      const scroller = scrollRef.current;
-      if (scroller) scroller.scrollLeft = LEAD_DAYS * getDayWidth();
-    });
-  };
-
-  const handleScroll = () => {
-    const scroller = scrollRef.current;
-    if (!scroller || recenteringRef.current) return;
-    const dayWidth = getDayWidth();
-    const center = LEAD_DAYS * dayWidth;
-    const distance = scroller.scrollLeft - center;
-    if (Math.abs(distance) < dayWidth) return;
-    const shift = Math.trunc(distance / dayWidth);
-    if (shift === 0) return;
-    recenteringRef.current = true;
-    setAnchorDate((current) => addDays(current, shift));
-    requestAnimationFrame(() => {
-      scroller.scrollLeft -= shift * dayWidth;
-      recenteringRef.current = false;
-    });
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === 'touch' || (event.target as HTMLElement).closest('button, input, textarea')) return;
-    const scroller = scrollRef.current;
-    if (!scroller) return;
-    dragRef.current = { x: event.clientX, scrollLeft: scroller.scrollLeft };
-    scroller.classList.add('is-dragging');
-    scroller.setPointerCapture(event.pointerId);
-    const handleMove = (moveEvent: PointerEvent) => {
-      if (!dragRef.current) return;
-      scroller.scrollLeft = dragRef.current.scrollLeft - (moveEvent.clientX - dragRef.current.x);
-    };
-    const handleUp = () => {
-      dragRef.current = null;
-      scroller.classList.remove('is-dragging');
-      window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', handleUp);
-    };
-    window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', handleUp);
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    swipeRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    event.currentTarget.classList.add('is-dragging');
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    event.currentTarget.classList.remove('is-dragging');
+    if (!start || start.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+    suppressClickUntilRef.current = Date.now() + 350;
+    moveCalendar(deltaX < 0 ? 1 : -1);
+  };
+
+  const handlePointerCancel = () => {
+    swipeRef.current = null;
+    scrollRef.current?.classList.remove('is-dragging');
+  };
+
+  const handleTimelineWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY) || Math.abs(event.deltaX) < 20) return;
+    event.preventDefault();
+    const now = Date.now();
+    if (now - lastWheelNavigationRef.current < 450) return;
+    lastWheelNavigationRef.current = now;
+    moveCalendar(event.deltaX > 0 ? 1 : -1);
+  };
+
+  const handleTimelineClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (Date.now() < suppressClickUntilRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
 
   const toggleFilter = (id: string) => {
@@ -680,8 +843,10 @@ export default function FamilyCalendar() {
   return (
     <main className="calendar-shell">
       <CalendarHeader
-        onPrevious={() => moveByDays(-1)}
-        onNext={() => moveByDays(1)}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        onPrevious={() => moveCalendar(-1)}
+        onNext={() => moveCalendar(1)}
         onToday={returnToday}
         accountName={account.name}
         accountColor={accountMember?.color ?? '#9B74E8'}
@@ -694,16 +859,32 @@ export default function FamilyCalendar() {
           {dataError && <button type="button" onClick={() => { void loadEvents(); }}>Try again</button>}
         </div>
       )}
-      <ThreeDayView
-        days={days}
-        events={events}
-        activeIds={activeIds}
-        scrollRef={scrollRef}
-        onOpenEvent={(event) => { setFormError(''); setDraft({ ...event }); }}
-        onEmptySlot={openEmptySlot}
-        onScroll={handleScroll}
-        onPointerDown={handlePointerDown}
-      />
+      {viewMode === 'month' ? (
+        <MonthView
+          anchorDate={anchorDate}
+          events={events}
+          activeIds={activeIds}
+          onPrevious={() => moveCalendar(-1)}
+          onNext={() => moveCalendar(1)}
+          onOpenEvent={(event) => { setFormError(''); setDraft({ ...event }); }}
+          onEmptyDate={(date) => openEmptySlot(date, 9)}
+        />
+      ) : (
+        <TimelineView
+          mode={viewMode}
+          days={days}
+          events={events}
+          activeIds={activeIds}
+          scrollRef={scrollRef}
+          onOpenEvent={(event) => { setFormError(''); setDraft({ ...event }); }}
+          onEmptySlot={openEmptySlot}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
+          onWheel={handleTimelineWheel}
+          onClickCapture={handleTimelineClickCapture}
+        />
+      )}
       <button className="add-button" aria-label="Add event" onClick={() => { setFormError(''); setDraft(defaultDraft(anchorDate)); }}>+</button>
       {draft && (
         <EventEditor
