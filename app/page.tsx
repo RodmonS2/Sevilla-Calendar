@@ -135,26 +135,23 @@ function CalendarHeader({ onPrevious, onNext, onToday }: { onPrevious: () => voi
   );
 }
 
-function FamilyLegend({ activeIds, onToggle, onEveryone }: { activeIds: Set<string>; onToggle: (id: string) => void; onEveryone: () => void }) {
-  const everyoneActive = activeIds.size === FAMILY.length;
+function FamilyLegend({ activeIds, onToggle }: { activeIds: Set<string>; onToggle: (id: string) => void }) {
   return (
     <section className="family-legend" aria-label="Filter family members">
-      <button className={`everyone-pill ${everyoneActive ? 'active' : ''}`} aria-pressed={everyoneActive} onClick={onEveryone}>
-        Everyone
-      </button>
       {FAMILY.map((member) => {
         const active = activeIds.has(member.id);
         return (
           <button
-            className={`family-pill ${active ? 'active' : 'inactive'}`}
+            className={`family-avatar-button ${active ? 'active' : 'inactive'}`}
             style={{ '--member-color': member.color, '--member-tint': member.tint } as React.CSSProperties}
             aria-pressed={active}
+            aria-label={`${active ? 'Hide' : 'Show'} ${member.name}'s events`}
+            title={`${member.name} — ${active ? 'visible' : 'hidden'}`}
             onClick={() => onToggle(member.id)}
             key={member.id}
           >
-            <span className="avatar" style={{ backgroundColor: member.color }}>{member.initial}</span>
-            <span>{member.name}</span>
-            <span className="filter-state" aria-hidden="true">{active ? '✓' : '+'}</span>
+            <span className="family-avatar" style={{ backgroundColor: active ? member.color : undefined }}>{member.initial}</span>
+            <span className="sr-only">{member.name}</span>
           </button>
         );
       })}
@@ -250,8 +247,7 @@ function ThreeDayView({ days, events, activeIds, scrollRef, onOpenEvent, onEmpty
             return (
               <div className={`date-heading ${isToday ? 'is-today' : ''}`} key={toDateKey(date)}>
                 <span>{date.toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                <strong>{date.getDate()}</strong>
-                {isToday && <small>Today</small>}
+                <strong className="date-number">{date.getDate()}</strong>
               </div>
             );
           })}
@@ -488,7 +484,7 @@ export default function FamilyCalendar() {
   return (
     <main className="calendar-shell">
       <CalendarHeader onPrevious={() => moveByDays(-1)} onNext={() => moveByDays(1)} onToday={returnToday} />
-      <FamilyLegend activeIds={activeIds} onToggle={toggleFilter} onEveryone={() => setActiveIds(new Set(FAMILY.map((member) => member.id)))} />
+      <FamilyLegend activeIds={activeIds} onToggle={toggleFilter} />
       <ThreeDayView
         days={days}
         events={events}
