@@ -119,15 +119,12 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ viewMode, onViewModeChange, onPrevious, onNext, onToday, accountName, accountColor, onSignOut }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily }: {
   viewMode: CalendarViewMode;
+  anchorDate: Date;
+  activeIds: Set<string>;
   onViewModeChange: (mode: CalendarViewMode) => void;
-  onPrevious: () => void;
-  onNext: () => void;
-  onToday: () => void;
-  accountName: string;
-  accountColor: string;
-  onSignOut: () => void;
+  onToggleFamily: (id: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -147,8 +144,6 @@ function CalendarHeader({ viewMode, onViewModeChange, onPrevious, onNext, onToda
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [menuOpen]);
-
-  const stepLabel = viewMode === 'day' ? 'day' : viewMode === 'three-day' ? '3 days' : 'month';
 
   return (
     <header className="topbar">
@@ -182,16 +177,9 @@ function CalendarHeader({ viewMode, onViewModeChange, onPrevious, onNext, onToda
           </div>
         )}
       </div>
-      <nav className="calendar-actions" aria-label="Calendar navigation">
-        {viewMode !== 'month' && <button aria-label={`Previous ${stepLabel}`} className="icon-button" onClick={onPrevious}>←</button>}
-        <button className="today-button" onClick={onToday}>Today</button>
-        {viewMode !== 'month' && <button aria-label={`Next ${stepLabel}`} className="icon-button" onClick={onNext}>→</button>}
-        <div className="account-menu">
-          <span className="account-avatar" style={{ backgroundColor: accountColor }}>{accountName.charAt(0)}</span>
-          <span className="account-name">{accountName}</span>
-          <button className="sign-out-button" type="button" onClick={onSignOut}>Sign out</button>
-        </div>
-      </nav>
+      <span className="header-month">{anchorDate.toLocaleDateString('en-US', { month: 'short' })}</span>
+      <FamilyLegend activeIds={activeIds} onToggle={onToggleFamily} />
+      <span className="header-year">{anchorDate.getFullYear()}</span>
     </header>
   );
 }
@@ -207,12 +195,10 @@ function FamilyLegend({ activeIds, onToggle }: { activeIds: Set<string>; onToggl
             style={{ '--member-color': member.color, '--member-tint': member.tint } as React.CSSProperties}
             aria-pressed={active}
             aria-label={`${active ? 'Hide' : 'Show'} ${member.name}'s events`}
-            title={`${member.name} — ${active ? 'visible' : 'hidden'}`}
             onClick={() => onToggle(member.id)}
             key={member.id}
           >
             <span className="family-avatar" style={{ backgroundColor: active ? member.color : undefined }}>{member.initial}</span>
-            <span className="family-name">{member.name}</span>
           </button>
         );
       })}
@@ -634,7 +620,6 @@ export default function FamilyCalendar() {
   );
   const accountEmail = session?.user.email?.toLowerCase() ?? '';
   const account = ALLOWED_ACCOUNTS[accountEmail];
-  const accountMember = FAMILY.find((member) => member.id === account?.familyId);
 
   const loadEvents = useCallback(async () => {
     if (!supabase) return;
@@ -720,10 +705,6 @@ export default function FamilyCalendar() {
       if (viewMode === 'month') return addMonths(current, direction);
       return addDays(current, direction * (viewMode === 'three-day' ? 3 : 1));
     });
-  };
-
-  const returnToday = () => {
-    setAnchorDate(today);
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -844,15 +825,11 @@ export default function FamilyCalendar() {
     <main className="calendar-shell">
       <CalendarHeader
         viewMode={viewMode}
+        anchorDate={anchorDate}
+        activeIds={activeIds}
         onViewModeChange={setViewMode}
-        onPrevious={() => moveCalendar(-1)}
-        onNext={() => moveCalendar(1)}
-        onToday={returnToday}
-        accountName={account.name}
-        accountColor={accountMember?.color ?? '#9B74E8'}
-        onSignOut={() => { void supabase?.auth.signOut(); }}
+        onToggleFamily={toggleFilter}
       />
-      <FamilyLegend activeIds={activeIds} onToggle={toggleFilter} />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">
           <span>{dataError || 'Syncing the family schedule…'}</span>

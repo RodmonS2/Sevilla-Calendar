@@ -21,7 +21,7 @@ button { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 .calendar-shell { min-height: 100vh; padding: 18px clamp(12px, 2.5vw, 36px) 38px; }
-.topbar { position: relative; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 1540px; margin: 0 auto 10px; }
+.topbar { position: relative; z-index: 30; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: clamp(9px, 1.8vw, 22px); max-width: 1540px; min-height: 42px; margin: 0 auto 10px; }
 .eyebrow { margin: 0 0 5px; color: #7a8390; font-size: 11px; font-weight: 780; letter-spacing: .14em; text-transform: uppercase; text-shadow: 1px 1px 0 rgba(255,255,255,.75); }
 h1 { margin: 0; color: #27303b; font-size: clamp(29px, 4vw, 44px); line-height: 1.04; letter-spacing: -.045em; text-shadow: 1px 2px 1px rgba(255,255,255,.86); }
 .view-menu { position: relative; }
@@ -35,6 +35,8 @@ h1 { margin: 0; color: #27303b; font-size: clamp(29px, 4vw, 44px); line-height: 
 .view-dropdown button:hover { background: rgba(255,255,255,.32); }
 .view-dropdown button.active { background: #e3e7ed; box-shadow: var(--pressed); color: #313a46; }
 .view-dropdown button i { color: #4c91e8; font-style: normal; font-weight: 900; }
+.header-month, .header-year { color: #4f5966; font-size: 14px; font-weight: 790; line-height: 1; text-shadow: 1px 1px 0 rgba(255,255,255,.84); white-space: nowrap; }
+.header-year { text-align: right; }
 .calendar-actions { display: flex; align-items: center; gap: 11px; }
 .icon-button, .today-button { border: 0; background: var(--paper); color: #3e4855; box-shadow: var(--raised-soft); cursor: pointer; transition: box-shadow .16s ease, transform .16s ease; }
 .icon-button:hover, .today-button:hover { transform: translateY(-1px); }
@@ -47,15 +49,14 @@ h1 { margin: 0; color: #27303b; font-size: clamp(29px, 4vw, 44px); line-height: 
 .sign-out-button { min-height: 32px; border: 0; border-radius: 10px; padding: 0 10px; background: #e9edf2; box-shadow: var(--raised-soft); color: #697380; cursor: pointer; font-size: 11px; font-weight: 720; }
 .sign-out-button:active { box-shadow: var(--pressed); }
 
-.family-legend { display: flex; align-items: center; justify-content: center; gap: clamp(7px, 2vw, 18px); width: fit-content; max-width: 100%; margin: 0 auto 10px; padding: 2px 4px; }
-.family-filter { display: grid; flex: 0 0 auto; justify-items: center; gap: 3px; min-width: 43px; border: 0; padding: 0; background: transparent; cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
+.family-legend { display: flex; align-items: center; justify-content: center; gap: clamp(6px, 1.4vw, 12px); width: 100%; min-width: 0; margin: 0; padding: 2px; }
+.family-filter { display: grid; flex: 0 0 auto; place-items: center; width: 30px; height: 30px; border: 0; padding: 0; background: transparent; cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
 .family-filter:hover { transform: translateY(-1px); }
 .family-filter:active { transform: translateY(0); }
 .family-filter.inactive { opacity: .42; }
 .family-avatar { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border: 3px solid var(--paper); border-radius: 50%; background: #d8dde4; color: white; box-shadow: 3px 3px 7px rgba(145,154,167,.38), -3px -3px 7px rgba(255,255,255,.82), inset 1px 1px 2px rgba(255,255,255,.28); font-size: 10px; font-weight: 840; text-shadow: 0 1px 2px rgba(29,33,40,.24); }
 .family-filter.active .family-avatar::after { position: absolute; inset: -5px; border: 1.5px solid color-mix(in srgb, var(--member-color) 62%, white); border-radius: 50%; content: ''; }
 .family-filter.inactive .family-avatar { color: #8b929c; text-shadow: 1px 1px 0 rgba(255,255,255,.75); }
-.family-name { color: #68727e; font-size: 10px; font-weight: 730; line-height: 1; text-shadow: 1px 1px 0 rgba(255,255,255,.8); }
 
 .calendar-card { position: relative; max-width: 1540px; margin: 0 auto; padding: 7px; border: 1px solid rgba(255,255,255,.5); border-radius: 21px; background: var(--paper); box-shadow: var(--raised); }
 .timeline-card { height: min(74vh, 700px); }
@@ -181,20 +182,14 @@ button:disabled { cursor: wait; opacity: .62; }
 @media (max-width: 700px) {
   :root { --time-width: 48px; --raised: 7px 7px 15px rgba(155,164,177,.45), -7px -7px 15px rgba(255,255,255,.82); }
   .calendar-shell { padding: 10px 7px 24px; }
-  .topbar { margin-bottom: 7px; padding: 0 3px; }
+  .topbar { grid-template-columns: 38px auto minmax(0, 1fr) auto; gap: 7px; min-height: 38px; margin-bottom: 7px; padding: 0 3px; }
   .menu-button { width: 38px; height: 38px; border-radius: 12px; }
   .view-dropdown { top: 45px; }
-  .calendar-actions { gap: 6px; }
-  .icon-button { width: 36px; height: 36px; font-size: 17px; }
-  .today-button { height: 36px; padding: 0 11px; }
-  .account-menu { margin-left: 0; padding: 3px; }
-  .account-name, .sign-out-button { display: none; }
-  .account-avatar { width: 29px; height: 29px; }
-  .family-legend { gap: clamp(6px, 4vw, 14px); margin-bottom: 7px; padding: 1px 3px; }
-  .family-filter { min-width: 40px; gap: 2px; }
-  .family-avatar { width: 27px; height: 27px; border-width: 2px; font-size: 9px; }
-  .family-name { font-size: 9px; }
-  .timeline-card { height: calc(100dvh - 112px); min-height: 500px; padding: 5px; border-radius: 17px; }
+  .header-month, .header-year { font-size: 12px; }
+  .family-legend { gap: clamp(4px, 2.2vw, 9px); padding: 0; }
+  .family-filter { width: 27px; height: 27px; }
+  .family-avatar { width: 25px; height: 25px; border-width: 2px; font-size: 8.5px; }
+  .timeline-card { height: calc(100dvh - 68px); min-height: 500px; padding: 5px; border-radius: 17px; }
   .calendar-scroll { border-radius: 12px; }
   .date-header { height: 52px; }
   .time-heading { padding-bottom: 7px; font-size: 8px; }
