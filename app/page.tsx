@@ -13,6 +13,8 @@ type FamilyMember = {
   initial: string;
 };
 
+type RepeatUnit = 'none' | 'day' | 'week' | 'month' | 'year';
+
 type CalendarEvent = {
   id: string;
   title: string;
@@ -20,7 +22,10 @@ type CalendarEvent = {
   startTime: string;
   endTime: string;
   participantIds: string[];
+  location: string;
   notes: string;
+  repeatInterval: number;
+  repeatUnit: RepeatUnit;
 };
 
 type EditorDraft = Omit<CalendarEvent, 'id'> & { id?: string };
@@ -33,7 +38,10 @@ type DatabaseCalendarEvent = {
   start_time: string;
   end_time: string;
   participant_ids: string[];
+  location: string;
   notes: string;
+  repeat_interval: number;
+  repeat_unit: RepeatUnit;
 };
 
 const ALLOWED_ACCOUNTS: Record<string, { name: string; familyId: 'mom' | 'dad' }> = {
@@ -60,6 +68,14 @@ const VIEW_OPTIONS: { id: CalendarViewMode; label: string }[] = [
   { id: 'month', label: 'Month' },
 ];
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const DATABASE_EVENT_FIELDS = 'id,title,event_date,start_time,end_time,participant_ids,location,notes,repeat_interval,repeat_unit';
+const REPEAT_OPTIONS: { label: string; interval: number; unit: RepeatUnit }[] = [
+  { label: 'Does not repeat', interval: 0, unit: 'none' },
+  { label: 'Every day', interval: 1, unit: 'day' },
+  { label: 'Every week', interval: 1, unit: 'week' },
+  { label: 'Every month', interval: 1, unit: 'month' },
+  { label: 'Every year', interval: 1, unit: 'year' },
+];
 
 function addDays(date: Date, amount: number) {
   const next = new Date(date);
@@ -78,6 +94,42 @@ function toDateKey(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function dateKeyParts(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return { year, month, day };
+}
+
+function eventOccursOn(event: CalendarEvent, dateKey: string) {
+  const start = dateKeyParts(event.date);
+  const target = dateKeyParts(dateKey);
+  const startValue = Date.UTC(start.year, start.month - 1, start.day);
+  const targetValue = Date.UTC(target.year, target.month - 1, target.day);
+  if (targetValue < startValue) return false;
+  if (event.repeatUnit === 'none' || event.repeatInterval < 1) return targetValue === startValue;
+
+  const dayDifference = Math.round((targetValue - startValue) / 86_400_000);
+  if (event.repeatUnit === 'day') return dayDifference % event.repeatInterval === 0;
+  if (event.repeatUnit === 'week') return dayDifference % (event.repeatInterval * 7) === 0;
+  if (event.repeatUnit === 'month') {
+    const monthDifference = (target.year - start.year) * 12 + target.month - start.month;
+    return target.day === start.day && monthDifference % event.repeatInterval === 0;
+  }
+  return target.month === start.month
+    && target.day === start.day
+    && (target.year - start.year) % event.repeatInterval === 0;
+}
+
+function eventsForDate(events: CalendarEvent[], date: Date) {
+  const dateKey = toDateKey(date);
+  return events.filter((event) => eventOccursOn(event, dateKey));
+}
+
+function repeatLabel(interval: number, unit: RepeatUnit) {
+  if (unit === 'none' || interval < 1) return 'Does not repeat';
+  if (interval === 1) return `Every ${unit}`;
+  return `Every ${interval} ${unit}s`;
 }
 
 function timeToMinutes(time: string) {
@@ -105,7 +157,10 @@ function defaultDraft(date = new Date(), hour = 9): EditorDraft {
     startTime: `${String(startHour).padStart(2, '0')}:00`,
     endTime: `${String(startHour + 1).padStart(2, '0')}:00`,
     participantIds: [],
+    location: '',
     notes: '',
+    repeatInterval: 0,
+    repeatUnit: 'none',
   };
 }
 
@@ -117,7 +172,10 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
     startTime: event.start_time.slice(0, 5),
     endTime: event.end_time.slice(0, 5),
     participantIds: event.participant_ids,
+    location: event.location ?? '',
     notes: event.notes ?? '',
+    repeatInterval: event.repeat_interval ?? 0,
+    repeatUnit: event.repeat_unit ?? 'none',
   };
 }
 
@@ -385,7 +443,7 @@ function TimelineView({ mode, days, events, activeIds, scrollRef, onOpenEvent, o
           {days.map((date) => (
             <DayColumn
               date={date}
-              events={events.filter((event) => event.date === toDateKey(date))}
+              events={eventsForDate(events, date)}
               activeIds={activeIds}
               onOpenEvent={onOpenEvent}
               onEmptySlot={onEmptySlot}
@@ -451,7 +509,7 @@ function MonthView({ anchorDate, events, activeIds, onPrevious, onNext, onOpenEv
         {gridDays.map((date) => {
           const dateKey = toDateKey(date);
           const inMonth = date.getMonth() === anchorDate.getMonth();
-          const dayEvents = events.filter((event) => event.date === dateKey);
+          const dayEvents = eventsForDate(events, date);
           return (
             <div className={`month-day ${inMonth ? '' : 'outside-month'} ${dateKey === todayKey ? 'is-today' : ''}`} key={dateKey}>
               <button
@@ -482,11 +540,44 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
   onSave: (event: FormEvent) => void;
   onDelete: (() => void) | null;
 }) {
+  const [repeatMenuOpen, setRepeatMenuOpen] = useState(false);
+  const [customRepeatOpen, setCustomRepeatOpen] = useState(false);
+  const [customInterval, setCustomInterval] = useState(Math.max(1, draft.repeatInterval || 1));
+  const [customUnit, setCustomUnit] = useState<Exclude<RepeatUnit, 'none'>>(draft.repeatUnit === 'none' ? 'day' : draft.repeatUnit);
+  const repeatControlRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!repeatMenuOpen && !customRepeatOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!repeatControlRef.current?.contains(event.target as Node)) {
+        setRepeatMenuOpen(false);
+        setCustomRepeatOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setRepeatMenuOpen(false);
+        setCustomRepeatOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', closeOnOutsideClick);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsideClick);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [repeatMenuOpen, customRepeatOpen]);
+
   const toggleParticipant = (id: string) => {
     const participantIds = draft.participantIds.includes(id)
       ? draft.participantIds.filter((participantId) => participantId !== id)
       : [...draft.participantIds, id];
     onChange({ ...draft, participantIds });
+  };
+
+  const chooseRepeat = (interval: number, unit: RepeatUnit) => {
+    onChange({ ...draft, repeatInterval: interval, repeatUnit: unit });
+    setRepeatMenuOpen(false);
   };
 
   return (
@@ -511,13 +602,92 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
             </label>
             <label className="field">
               <span>Start time</span>
-              <input type="time" min="01:00" max="23:00" step="900" required value={draft.startTime} onChange={(event) => onChange({ ...draft, startTime: event.target.value })} />
+              <input type="time" min="01:00" max="23:00" step="60" required value={draft.startTime} onChange={(event) => onChange({ ...draft, startTime: event.target.value })} />
             </label>
             <label className="field">
               <span>End time</span>
-              <input type="time" min="01:15" max="23:59" step="900" required value={draft.endTime} onChange={(event) => onChange({ ...draft, endTime: event.target.value })} />
+              <input type="time" min="01:01" max="23:59" step="60" required value={draft.endTime} onChange={(event) => onChange({ ...draft, endTime: event.target.value })} />
             </label>
           </div>
+          <div className="repeat-row">
+            <div className="repeat-control" ref={repeatControlRef}>
+              <button
+                type="button"
+                className="repeat-trigger"
+                aria-haspopup="menu"
+                aria-expanded={repeatMenuOpen}
+                onClick={() => { setRepeatMenuOpen((open) => !open); setCustomRepeatOpen(false); }}
+              >
+                <span>{repeatLabel(draft.repeatInterval, draft.repeatUnit)}</span>
+                <i aria-hidden="true">⌄</i>
+              </button>
+              {repeatMenuOpen && (
+                <div className="repeat-dropdown" role="menu" aria-label="Repeat event">
+                  {REPEAT_OPTIONS.map((option) => {
+                    const active = draft.repeatInterval === option.interval && draft.repeatUnit === option.unit;
+                    return (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        className={active ? 'active' : ''}
+                        onClick={() => chooseRepeat(option.interval, option.unit)}
+                        key={option.label}
+                      >
+                        <span>{option.label}</span>
+                        <i aria-hidden="true">{active ? '✓' : ''}</i>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setRepeatMenuOpen(false); setCustomRepeatOpen(true); }}
+                  >
+                    <span>Custom…</span>
+                    <i aria-hidden="true">›</i>
+                  </button>
+                </div>
+              )}
+              {customRepeatOpen && (
+                <div className="custom-repeat-picker" role="dialog" aria-label="Custom repeat interval">
+                  <p>Every</p>
+                  <div className="custom-repeat-columns">
+                    <label>
+                      <span className="sr-only">Repeat interval</span>
+                      <select size={5} value={customInterval} onChange={(event) => setCustomInterval(Number(event.target.value))}>
+                        {Array.from({ length: 99 }, (_, index) => index + 1).map((value) => <option value={value} key={value}>{value}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="sr-only">Repeat unit</span>
+                      <select size={4} value={customUnit} onChange={(event) => setCustomUnit(event.target.value as Exclude<RepeatUnit, 'none'>)}>
+                        <option value="day">days</option>
+                        <option value="week">weeks</option>
+                        <option value="month">months</option>
+                        <option value="year">years</option>
+                      </select>
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="confirm-repeat"
+                    aria-label={`Repeat every ${customInterval} ${customUnit}${customInterval === 1 ? '' : 's'}`}
+                    onClick={() => {
+                      onChange({ ...draft, repeatInterval: customInterval, repeatUnit: customUnit });
+                      setCustomRepeatOpen(false);
+                    }}
+                  >
+                    ✓
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          <label className="field field-full location-field">
+            <span className="sr-only">Location</span>
+            <input maxLength={180} value={draft.location} placeholder="Add location" onChange={(event) => onChange({ ...draft, location: event.target.value })} />
+          </label>
           <fieldset className="participant-field">
             <legend>Family members</legend>
             <div className="participant-options">
@@ -675,7 +845,7 @@ export default function FamilyCalendar() {
     setEventsLoading(true);
     const { data, error } = await supabase
       .from('calendar_events')
-      .select('id,title,event_date,start_time,end_time,participant_ids,notes')
+      .select(DATABASE_EVENT_FIELDS)
       .order('event_date', { ascending: true })
       .order('start_time', { ascending: true });
     if (error) {
@@ -822,13 +992,16 @@ export default function FamilyCalendar() {
       start_time: draft.startTime,
       end_time: draft.endTime,
       participant_ids: draft.participantIds,
+      location: draft.location.trim(),
       notes: draft.notes.trim(),
+      repeat_interval: draft.repeatInterval,
+      repeat_unit: draft.repeatUnit,
     };
     const query = draft.id
       ? supabase.from('calendar_events').update(payload).eq('id', draft.id)
       : supabase.from('calendar_events').insert(payload);
     const { data, error } = await query
-      .select('id,title,event_date,start_time,end_time,participant_ids,notes')
+      .select(DATABASE_EVENT_FIELDS)
       .single();
     if (error) {
       setFormError('This event could not be saved. Please check the database setup and try again.');

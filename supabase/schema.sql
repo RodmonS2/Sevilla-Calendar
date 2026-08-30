@@ -10,23 +10,44 @@ create table if not exists public.calendar_events (
   start_time time not null,
   end_time time not null,
   participant_ids text[] not null check (cardinality(participant_ids) > 0),
+  location text not null default '',
   notes text not null default '',
+  repeat_interval smallint not null default 0,
+  repeat_unit text not null default 'none',
   created_by uuid not null default auth.uid() references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint calendar_events_valid_time check (end_time > start_time),
   constraint calendar_events_valid_participants check (
     participant_ids <@ array['mom', 'dad', 'marra', 'bella', 'lola']::text[]
+  ),
+  constraint calendar_events_valid_repeat check (
+    (repeat_unit = 'none' and repeat_interval = 0)
+    or (repeat_unit in ('day', 'week', 'month', 'year') and repeat_interval between 1 and 99)
   )
 );
 
--- Keep existing installations aligned when the family list changes.
+-- Keep existing installations aligned when the event model changes.
+alter table public.calendar_events
+  add column if not exists location text not null default '',
+  add column if not exists repeat_interval smallint not null default 0,
+  add column if not exists repeat_unit text not null default 'none';
+
 alter table public.calendar_events
   drop constraint if exists calendar_events_valid_participants;
 
 alter table public.calendar_events
   add constraint calendar_events_valid_participants check (
     participant_ids <@ array['mom', 'dad', 'marra', 'bella', 'lola']::text[]
+  );
+
+alter table public.calendar_events
+  drop constraint if exists calendar_events_valid_repeat;
+
+alter table public.calendar_events
+  add constraint calendar_events_valid_repeat check (
+    (repeat_unit = 'none' and repeat_interval = 0)
+    or (repeat_unit in ('day', 'week', 'month', 'year') and repeat_interval between 1 and 99)
   );
 
 create or replace function public.set_calendar_event_updated_at()
