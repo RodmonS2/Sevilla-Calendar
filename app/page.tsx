@@ -137,6 +137,18 @@ function timeToMinutes(time: string) {
   return hours * 60 + minutes;
 }
 
+function addMinutesToTime(time: string, amount: number) {
+  const totalMinutes = (timeToMinutes(time) + amount + 1_440) % 1_440;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function timeDurationMinutes(startTime: string, endTime: string) {
+  const difference = timeToMinutes(endTime) - timeToMinutes(startTime);
+  return difference < 0 ? difference + 1_440 : difference;
+}
+
 function formatHour(hour: number) {
   if (hour === 12) return '12 PM';
   return `${hour > 12 ? hour - 12 : hour} ${hour >= 12 ? 'PM' : 'AM'}`;
@@ -348,7 +360,7 @@ function CalendarEventCard({ event, activeIds, onOpen, hourHeight }: {
   const single = participants.length === 1 ? participants[0] : null;
   const visible = event.participantIds.some((id) => activeIds.has(id));
   const start = timeToMinutes(event.startTime);
-  const duration = Math.max(timeToMinutes(event.endTime) - start, 30);
+  const duration = Math.max(timeDurationMinutes(event.startTime, event.endTime), 30);
   const top = Math.max(0, ((start - 60) / 60) * hourHeight);
   const height = Math.max(28, (duration / 60) * hourHeight - 2);
 
@@ -602,11 +614,26 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
             </label>
             <label className="field">
               <span>Start time</span>
-              <input type="time" min="01:00" max="23:00" step="60" required value={draft.startTime} onChange={(event) => onChange({ ...draft, startTime: event.target.value })} />
+              <input
+                type="time"
+                min="01:00"
+                max="23:59"
+                step="60"
+                required
+                value={draft.startTime}
+                onChange={(event) => {
+                  const startTime = event.target.value;
+                  onChange({
+                    ...draft,
+                    startTime,
+                    endTime: startTime ? addMinutesToTime(startTime, 60) : draft.endTime,
+                  });
+                }}
+              />
             </label>
             <label className="field">
               <span>End time</span>
-              <input type="time" min="01:01" max="23:59" step="60" required value={draft.endTime} onChange={(event) => onChange({ ...draft, endTime: event.target.value })} />
+              <input type="time" min="00:00" max="23:59" step="60" required value={draft.endTime} onChange={(event) => onChange({ ...draft, endTime: event.target.value })} />
             </label>
           </div>
           <div className="repeat-row">
@@ -833,6 +860,8 @@ export default function FamilyCalendar() {
   const swipeRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const suppressClickUntilRef = useRef(0);
   const lastWheelNavigationRef = useRef(0);
+  const lastWheelInputRef = useRef(0);
+  const wheelDeltaRef = useRef(0);
   const days = useMemo(
     () => viewMode === 'day' ? [anchorDate] : [anchorDate, addDays(anchorDate, 1), addDays(anchorDate, 2)],
     [anchorDate, viewMode],
@@ -940,7 +969,7 @@ export default function FamilyCalendar() {
     if (!start || start.pointerId !== event.pointerId) return;
     const deltaX = event.clientX - start.x;
     const deltaY = event.clientY - start.y;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+    if (Math.abs(deltaX) < 26 || Math.abs(deltaX) <= Math.abs(deltaY) * .75) return;
     suppressClickUntilRef.current = Date.now() + 350;
     moveCalendar(deltaX < 0 ? 1 : -1);
   };
@@ -951,12 +980,22 @@ export default function FamilyCalendar() {
   };
 
   const handleTimelineWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY) || Math.abs(event.deltaX) < 20) return;
+    const horizontalDelta = event.shiftKey && Math.abs(event.deltaX) < Math.abs(event.deltaY)
+      ? event.deltaY
+      : event.deltaX;
+    const hasHorizontalIntent = event.shiftKey
+      || (Math.abs(event.deltaX) >= 2 && Math.abs(event.deltaX) >= Math.abs(event.deltaY) * .55);
+    if (!hasHorizontalIntent) return;
     event.preventDefault();
     const now = Date.now();
-    if (now - lastWheelNavigationRef.current < 450) return;
+    if (now - lastWheelInputRef.current > 180) wheelDeltaRef.current = 0;
+    lastWheelInputRef.current = now;
+    wheelDeltaRef.current += horizontalDelta;
+    if (Math.abs(wheelDeltaRef.current) < 18 || now - lastWheelNavigationRef.current < 160) return;
     lastWheelNavigationRef.current = now;
-    moveCalendar(event.deltaX > 0 ? 1 : -1);
+    const direction = wheelDeltaRef.current > 0 ? 1 : -1;
+    wheelDeltaRef.current = 0;
+    moveCalendar(direction);
   };
 
   const handleTimelineClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -984,7 +1023,7 @@ export default function FamilyCalendar() {
     if (!draft || !supabase) return;
     if (!draft.title.trim()) { setFormError('Please add an event name.'); return; }
     if (draft.participantIds.length === 0) { setFormError('Choose at least one family member.'); return; }
-    if (timeToMinutes(draft.endTime) <= timeToMinutes(draft.startTime)) { setFormError('End time must be after start time.'); return; }
+    if (draft.endTime === draft.startTime) { setFormError('Start and end time must be different.'); return; }
     setSaving(true);
     const payload = {
       title: draft.title.trim(),

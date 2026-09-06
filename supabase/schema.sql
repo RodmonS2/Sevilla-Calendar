@@ -17,7 +17,7 @@ create table if not exists public.calendar_events (
   created_by uuid not null default auth.uid() references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint calendar_events_valid_time check (end_time > start_time),
+  constraint calendar_events_valid_time check (end_time <> start_time),
   constraint calendar_events_valid_participants check (
     participant_ids <@ array['mom', 'dad', 'marra', 'bella', 'lola']::text[]
   ),
@@ -32,6 +32,12 @@ alter table public.calendar_events
   add column if not exists location text not null default '',
   add column if not exists repeat_interval smallint not null default 0,
   add column if not exists repeat_unit text not null default 'none';
+
+alter table public.calendar_events
+  drop constraint if exists calendar_events_valid_time;
+
+alter table public.calendar_events
+  add constraint calendar_events_valid_time check (end_time <> start_time);
 
 alter table public.calendar_events
   drop constraint if exists calendar_events_valid_participants;
