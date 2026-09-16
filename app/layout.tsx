@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
@@ -16,6 +16,19 @@ export const metadata: Metadata = {
   metadataBase: new URL('https://rodmo-family-calendar.sliph320.chatgpt.site'),
   title: 'Together — Family Calendar',
   description: 'A calm, shared three-day calendar for the whole family.',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Together',
+  },
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
   openGraph: {
     title: 'Together — Family Calendar',
     description: 'A calm, shared three-day calendar for the whole family.',
@@ -28,6 +41,10 @@ export const metadata: Metadata = {
     description: 'A calm, shared three-day calendar for the whole family.',
     images: ['/og.png'],
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#e9edf2',
 };
 
 export default function RootLayout({

@@ -3,6 +3,7 @@
 import { FormEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { PhoneReminderStatus, usePhoneReminders } from '@/lib/usePhoneReminders';
 
 type FamilyMember = {
   id: string;
@@ -191,15 +192,18 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, reminderMessage, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday, onToggleReminders }: {
   viewMode: CalendarViewMode;
   anchorDate: Date;
   activeIds: Set<string>;
+  reminderStatus: PhoneReminderStatus;
+  reminderMessage: string;
   onViewModeChange: (mode: CalendarViewMode) => void;
   onToggleFamily: (id: string) => void;
   onSelectMonth: (month: number) => void;
   onSelectYear: (year: number) => void;
   onToday: () => void;
+  onToggleReminders: () => void;
 }) {
   const [openPicker, setOpenPicker] = useState<'view' | 'month' | 'year' | null>(null);
   const headerRef = useRef<HTMLElement>(null);
@@ -251,6 +255,19 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onT
                 <i aria-hidden="true">{viewMode === option.id ? '✓' : ''}</i>
               </button>
             ))}
+            <div className="view-dropdown-divider" />
+            <p>Phone reminders</p>
+            <button
+              type="button"
+              role="menuitem"
+              className={reminderStatus === 'enabled' ? 'active' : ''}
+              disabled={reminderStatus === 'checking' || reminderStatus === 'unsupported'}
+              onClick={onToggleReminders}
+            >
+              <span>{reminderStatus === 'enabled' ? 'Reminders on' : reminderStatus === 'checking' ? 'Checking reminders…' : 'Enable reminders'}</span>
+              <i aria-hidden="true">{reminderStatus === 'enabled' ? '✓' : ''}</i>
+            </button>
+            {reminderMessage && <span className="reminder-message" role="status">{reminderMessage}</span>}
           </div>
         )}
       </div>
@@ -868,6 +885,7 @@ export default function FamilyCalendar() {
   );
   const accountEmail = session?.user.email?.toLowerCase() ?? '';
   const account = ALLOWED_ACCOUNTS[accountEmail];
+  const phoneReminders = usePhoneReminders(session?.user.id ?? '', account?.familyId ?? '');
 
   const loadEvents = useCallback(async () => {
     if (!supabase) return;
@@ -1088,6 +1106,8 @@ export default function FamilyCalendar() {
         viewMode={viewMode}
         anchorDate={anchorDate}
         activeIds={activeIds}
+        reminderStatus={phoneReminders.status}
+        reminderMessage={phoneReminders.message}
         onViewModeChange={setViewMode}
         onToggleFamily={toggleFilter}
         onSelectMonth={(month) => setAnchorDate((current) => new Date(current.getFullYear(), month, 1, 12))}
@@ -1097,6 +1117,7 @@ export default function FamilyCalendar() {
           currentDate.setHours(12, 0, 0, 0);
           setAnchorDate(currentDate);
         }}
+        onToggleReminders={() => { void phoneReminders.toggle(); }}
       />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">
