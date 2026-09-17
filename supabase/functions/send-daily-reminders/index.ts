@@ -14,6 +14,7 @@ type CalendarEvent = {
   repeat_unit: RepeatUnit;
   notification_value: number;
   notification_unit: NotificationUnit;
+  created_at: string;
 };
 
 type PushSubscriptionRow = {
@@ -253,7 +254,7 @@ Deno.serve(async (request) => {
   const [{ data: events, error: eventsError }, { data: subscriptions, error: subscriptionsError }, { data: deliveries, error: deliveriesError }] = await Promise.all([
     loadWithRetry(() => supabase
       .from('calendar_events')
-      .select('id,title,event_date,start_time,participant_ids,repeat_interval,repeat_unit,notification_value,notification_unit')
+      .select('id,title,event_date,start_time,participant_ids,repeat_interval,repeat_unit,notification_value,notification_unit,created_at')
       .not('notification_value', 'is', null)
       .not('notification_unit', 'is', null)
       .lte('event_date', lookAheadDate)),
@@ -275,14 +276,21 @@ Deno.serve(async (request) => {
   const dueOccurrences: DueOccurrence[] = [];
   for (const event of events as CalendarEvent[]) {
     const leadMinutes = notificationMinutes(event);
+    const createdRecently = Date.parse(event.created_at) >= scheduledAt.getTime() - 10 * 60_000;
     for (let dayOffset = 0; dayOffset <= 28; dayOffset += 1) {
       const occurrenceDate = addDaysToDateKey(localClock.dateKey, dayOffset);
       if (!occursOn(event, occurrenceDate)) continue;
       const minutesUntilStart = dayOffset * 1_440 + eventStartMinutes(event.start_time) - localClock.minutes;
-      // If the exact scheduler run was missed, or an event was created inside
-      // its selected lead time, catch up once while the event is still ahead.
-      if (minutesUntilStart >= 0 && minutesUntilStart <= leadMinutes + 4) {
+      const inRetryWindow = minutesUntilStart >= Math.max(0, leadMinutes - 34)
+        && minutesUntilStart <= leadMinutes + 4;
+      const newEventCatchUp = createdRecently
+        && minutesUntilStart >= 0
+        && minutesUntilStart <= leadMinutes + 4;
+      if (inRetryWindow || newEventCatchUp) {
         dueOccurrences.push({ event, occurrenceDate, reminderKind: reminderKind(event) });
+        // When a repeating event is created inside a long notification lead,
+        // notify only for its next occurrence instead of queuing every repeat.
+        if (newEventCatchUp) break;
       }
     }
   }
