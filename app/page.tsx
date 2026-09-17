@@ -3,7 +3,7 @@
 import { FormEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
-import { PhoneReminderStatus, usePhoneReminders } from '@/lib/usePhoneReminders';
+import { usePhoneReminders } from '@/lib/usePhoneReminders';
 
 type FamilyMember = {
   id: string;
@@ -15,6 +15,7 @@ type FamilyMember = {
 };
 
 type RepeatUnit = 'none' | 'day' | 'week' | 'month' | 'year';
+type NotificationUnit = 'minute' | 'hour' | 'day' | 'week';
 
 type CalendarEvent = {
   id: string;
@@ -27,6 +28,8 @@ type CalendarEvent = {
   notes: string;
   repeatInterval: number;
   repeatUnit: RepeatUnit;
+  notificationValue: number | null;
+  notificationUnit: NotificationUnit | null;
 };
 
 type EditorDraft = Omit<CalendarEvent, 'id'> & { id?: string };
@@ -43,6 +46,8 @@ type DatabaseCalendarEvent = {
   notes: string;
   repeat_interval: number;
   repeat_unit: RepeatUnit;
+  notification_value: number | null;
+  notification_unit: NotificationUnit | null;
 };
 
 const ALLOWED_ACCOUNTS: Record<string, { name: string; familyId: 'mom' | 'dad' }> = {
@@ -69,7 +74,7 @@ const VIEW_OPTIONS: { id: CalendarViewMode; label: string }[] = [
   { id: 'month', label: 'Month' },
 ];
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-const DATABASE_EVENT_FIELDS = 'id,title,event_date,start_time,end_time,participant_ids,location,notes,repeat_interval,repeat_unit';
+const DATABASE_EVENT_FIELDS = 'id,title,event_date,start_time,end_time,participant_ids,location,notes,repeat_interval,repeat_unit,notification_value,notification_unit';
 const REPEAT_OPTIONS: { label: string; interval: number; unit: RepeatUnit }[] = [
   { label: 'Does not repeat', interval: 0, unit: 'none' },
   { label: 'Every day', interval: 1, unit: 'day' },
@@ -77,6 +82,18 @@ const REPEAT_OPTIONS: { label: string; interval: number; unit: RepeatUnit }[] = 
   { label: 'Every month', interval: 1, unit: 'month' },
   { label: 'Every year', interval: 1, unit: 'year' },
 ];
+const NOTIFICATION_OPTIONS: { label: string; value: number; unit: NotificationUnit }[] = [
+  { label: '30 mins before', value: 30, unit: 'minute' },
+  { label: '1 hr before', value: 1, unit: 'hour' },
+  { label: '1 day before', value: 1, unit: 'day' },
+  { label: '1 week before', value: 1, unit: 'week' },
+];
+const NOTIFICATION_MAX: Record<NotificationUnit, number> = {
+  minute: 60,
+  hour: 24,
+  day: 28,
+  week: 4,
+};
 
 function addDays(date: Date, amount: number) {
   const next = new Date(date);
@@ -133,6 +150,14 @@ function repeatLabel(interval: number, unit: RepeatUnit) {
   return `Every ${interval} ${unit}s`;
 }
 
+function notificationLabel(value: number | null, unit: NotificationUnit | null) {
+  if (value === null || unit === null) return 'Notification';
+  const preset = NOTIFICATION_OPTIONS.find((option) => option.value === value && option.unit === unit);
+  if (preset) return preset.label;
+  const displayUnit = unit === 'minute' ? 'min' : unit;
+  return `${value} ${displayUnit}${value === 1 || displayUnit === 'min' ? '' : 's'} before`;
+}
+
 function timeToMinutes(time: string) {
   const [hours, minutes] = time.split(':').map(Number);
   return hours * 60 + minutes;
@@ -174,6 +199,8 @@ function defaultDraft(date = new Date(), hour = 9): EditorDraft {
     notes: '',
     repeatInterval: 0,
     repeatUnit: 'none',
+    notificationValue: null,
+    notificationUnit: null,
   };
 }
 
@@ -189,22 +216,20 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
     notes: event.notes ?? '',
     repeatInterval: event.repeat_interval ?? 0,
     repeatUnit: event.repeat_unit ?? 'none',
+    notificationValue: event.notification_value ?? null,
+    notificationUnit: event.notification_unit ?? null,
   };
 }
 
-function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, reminderMessage, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday, onToggleReminders, onTestReminders }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday }: {
   viewMode: CalendarViewMode;
   anchorDate: Date;
   activeIds: Set<string>;
-  reminderStatus: PhoneReminderStatus;
-  reminderMessage: string;
   onViewModeChange: (mode: CalendarViewMode) => void;
   onToggleFamily: (id: string) => void;
   onSelectMonth: (month: number) => void;
   onSelectYear: (year: number) => void;
   onToday: () => void;
-  onToggleReminders: () => void;
-  onTestReminders: () => void;
 }) {
   const [openPicker, setOpenPicker] = useState<'view' | 'month' | 'year' | null>(null);
   const headerRef = useRef<HTMLElement>(null);
@@ -256,24 +281,6 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, remin
                 <i aria-hidden="true">{viewMode === option.id ? '✓' : ''}</i>
               </button>
             ))}
-            <div className="view-dropdown-divider" />
-            <p>Phone reminders</p>
-            <button
-              type="button"
-              role="menuitem"
-              className={reminderStatus === 'enabled' ? 'active' : ''}
-              disabled={reminderStatus === 'checking' || reminderStatus === 'unsupported'}
-              onClick={onToggleReminders}
-            >
-              <span>{reminderStatus === 'enabled' ? 'Reminders on' : reminderStatus === 'checking' ? 'Checking reminders…' : 'Enable reminders'}</span>
-              <i aria-hidden="true">{reminderStatus === 'enabled' ? '✓' : ''}</i>
-            </button>
-            {reminderStatus === 'enabled' && (
-              <button type="button" role="menuitem" onClick={onTestReminders}>
-                <span>Send test notification</span>
-              </button>
-            )}
-            {reminderMessage && <span className="reminder-message" role="status">{reminderMessage}</span>}
           </div>
         )}
       </div>
@@ -566,7 +573,7 @@ function MonthView({ anchorDate, events, activeIds, onPrevious, onNext, onOpenEv
   );
 }
 
-function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete }: {
+function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete, onEnableNotifications }: {
   draft: EditorDraft;
   error: string;
   saving: boolean;
@@ -574,12 +581,18 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
   onClose: () => void;
   onSave: (event: FormEvent) => void;
   onDelete: (() => void) | null;
+  onEnableNotifications: () => Promise<boolean>;
 }) {
   const [repeatMenuOpen, setRepeatMenuOpen] = useState(false);
   const [customRepeatOpen, setCustomRepeatOpen] = useState(false);
   const [customInterval, setCustomInterval] = useState(Math.max(1, draft.repeatInterval || 1));
   const [customUnit, setCustomUnit] = useState<Exclude<RepeatUnit, 'none'>>(draft.repeatUnit === 'none' ? 'day' : draft.repeatUnit);
+  const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
+  const [customNotificationOpen, setCustomNotificationOpen] = useState(false);
+  const [customNotificationValue, setCustomNotificationValue] = useState(draft.notificationValue ?? 30);
+  const [customNotificationUnit, setCustomNotificationUnit] = useState<NotificationUnit>(draft.notificationUnit ?? 'minute');
   const repeatControlRef = useRef<HTMLDivElement>(null);
+  const notificationControlRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!repeatMenuOpen && !customRepeatOpen) return;
@@ -603,6 +616,28 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
     };
   }, [repeatMenuOpen, customRepeatOpen]);
 
+  useEffect(() => {
+    if (!notificationMenuOpen && !customNotificationOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!notificationControlRef.current?.contains(event.target as Node)) {
+        setNotificationMenuOpen(false);
+        setCustomNotificationOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setNotificationMenuOpen(false);
+        setCustomNotificationOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', closeOnOutsideClick);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsideClick);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [notificationMenuOpen, customNotificationOpen]);
+
   const toggleParticipant = (id: string) => {
     const participantIds = draft.participantIds.includes(id)
       ? draft.participantIds.filter((participantId) => participantId !== id)
@@ -613,6 +648,13 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
   const chooseRepeat = (interval: number, unit: RepeatUnit) => {
     onChange({ ...draft, repeatInterval: interval, repeatUnit: unit });
     setRepeatMenuOpen(false);
+  };
+
+  const chooseNotification = async (value: number, unit: NotificationUnit) => {
+    if (!await onEnableNotifications()) return;
+    onChange({ ...draft, notificationValue: value, notificationUnit: unit });
+    setNotificationMenuOpen(false);
+    setCustomNotificationOpen(false);
   };
 
   return (
@@ -727,6 +769,92 @@ function EventEditor({ draft, error, saving, onChange, onClose, onSave, onDelete
                       onChange({ ...draft, repeatInterval: customInterval, repeatUnit: customUnit });
                       setCustomRepeatOpen(false);
                     }}
+                  >
+                    ✓
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="notification-control" ref={notificationControlRef}>
+              <button
+                type="button"
+                className="notification-trigger"
+                aria-haspopup="menu"
+                aria-expanded={notificationMenuOpen}
+                onClick={() => {
+                  setNotificationMenuOpen((open) => !open);
+                  setCustomNotificationOpen(false);
+                }}
+              >
+                <span>{notificationLabel(draft.notificationValue, draft.notificationUnit)}</span>
+                <i aria-hidden="true">⌄</i>
+              </button>
+              {notificationMenuOpen && (
+                <div className="notification-dropdown" role="menu" aria-label="Event notification">
+                  {NOTIFICATION_OPTIONS.map((option) => {
+                    const active = draft.notificationValue === option.value && draft.notificationUnit === option.unit;
+                    return (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        className={active ? 'active' : ''}
+                        onClick={() => { void chooseNotification(option.value, option.unit); }}
+                        key={option.label}
+                      >
+                        <span>{option.label}</span>
+                        <i aria-hidden="true">{active ? '✓' : ''}</i>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setNotificationMenuOpen(false);
+                      setCustomNotificationOpen(true);
+                    }}
+                  >
+                    <span>Custom…</span>
+                    <i aria-hidden="true">›</i>
+                  </button>
+                </div>
+              )}
+              {customNotificationOpen && (
+                <div className="custom-notification-picker" role="dialog" aria-label="Custom notification time">
+                  <p>Before</p>
+                  <div className="custom-notification-columns">
+                    <label>
+                      <span className="sr-only">Notification amount</span>
+                      <select size={5} value={customNotificationValue} onChange={(event) => setCustomNotificationValue(Number(event.target.value))}>
+                        {Array.from({ length: NOTIFICATION_MAX[customNotificationUnit] + 1 }, (_, value) => (
+                          <option value={value} key={value}>{value}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="sr-only">Notification unit</span>
+                      <select
+                        size={4}
+                        value={customNotificationUnit}
+                        onChange={(event) => {
+                          const unit = event.target.value as NotificationUnit;
+                          setCustomNotificationUnit(unit);
+                          setCustomNotificationValue((value) => Math.min(value, NOTIFICATION_MAX[unit]));
+                        }}
+                      >
+                        <option value="minute">min</option>
+                        <option value="hour">hours</option>
+                        <option value="day">days</option>
+                        <option value="week">weeks</option>
+                      </select>
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    className="confirm-notification"
+                    aria-label={`Notify ${customNotificationValue} ${customNotificationUnit}${customNotificationValue === 1 ? '' : 's'} before`}
+                    onClick={() => { void chooseNotification(customNotificationValue, customNotificationUnit); }}
                   >
                     ✓
                   </button>
@@ -1059,6 +1187,8 @@ export default function FamilyCalendar() {
       notes: draft.notes.trim(),
       repeat_interval: draft.repeatInterval,
       repeat_unit: draft.repeatUnit,
+      notification_value: draft.notificationValue,
+      notification_unit: draft.notificationUnit,
     };
     const query = draft.id
       ? supabase.from('calendar_events').update(payload).eq('id', draft.id)
@@ -1112,8 +1242,6 @@ export default function FamilyCalendar() {
         viewMode={viewMode}
         anchorDate={anchorDate}
         activeIds={activeIds}
-        reminderStatus={phoneReminders.status}
-        reminderMessage={phoneReminders.message}
         onViewModeChange={setViewMode}
         onToggleFamily={toggleFilter}
         onSelectMonth={(month) => setAnchorDate((current) => new Date(current.getFullYear(), month, 1, 12))}
@@ -1123,8 +1251,6 @@ export default function FamilyCalendar() {
           currentDate.setHours(12, 0, 0, 0);
           setAnchorDate(currentDate);
         }}
-        onToggleReminders={() => { void phoneReminders.toggle(); }}
-        onTestReminders={() => { void phoneReminders.test(); }}
       />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">
@@ -1168,6 +1294,13 @@ export default function FamilyCalendar() {
           onClose={() => setDraft(null)}
           onSave={saveEvent}
           onDelete={draft.id ? deleteEvent : null}
+          onEnableNotifications={async () => {
+            const enabled = await phoneReminders.enable();
+            if (!enabled) {
+              setFormError('Phone notifications must be allowed before adding an event notification.');
+            }
+            return enabled;
+          }}
         />
       )}
     </main>

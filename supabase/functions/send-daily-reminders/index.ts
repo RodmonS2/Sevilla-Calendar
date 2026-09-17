@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import webpush from 'web-push';
 
 type RepeatUnit = 'none' | 'day' | 'week' | 'month' | 'year';
+type NotificationUnit = 'minute' | 'hour' | 'day' | 'week';
 
 type CalendarEvent = {
   id: string;
@@ -11,6 +12,8 @@ type CalendarEvent = {
   participant_ids: string[];
   repeat_interval: number;
   repeat_unit: RepeatUnit;
+  notification_value: number;
+  notification_unit: NotificationUnit;
 };
 
 type PushSubscriptionRow = {
@@ -22,8 +25,20 @@ type PushSubscriptionRow = {
   auth: string;
 };
 
+type DeliveryRow = {
+  subscription_id: string;
+  event_id: string;
+  occurrence_date: string;
+  reminder_kind: string;
+};
+
+type DueOccurrence = {
+  event: CalendarEvent;
+  occurrenceDate: string;
+  reminderKind: string;
+};
+
 const TIME_ZONE = 'America/Vancouver';
-const REMINDER_KIND = '30-minute';
 const CALENDAR_URL = 'https://rodmo-family-calendar.sliph320.chatgpt.site/';
 const QUERY_RETRY_DELAYS_MS = [0, 350, 1000];
 const TEST_NOTIFICATION_DELAY_MS = 8000;
@@ -51,6 +66,12 @@ async function loadWithRetry<T>(load: () => PromiseLike<DatabaseResult<T>>) {
 function dateParts(dateKey: string) {
   const [year, month, day] = dateKey.split('-').map(Number);
   return { year, month, day };
+}
+
+function addDaysToDateKey(dateKey: string, amount: number) {
+  const { year, month, day } = dateParts(dateKey);
+  const date = new Date(Date.UTC(year, month - 1, day + amount));
+  return date.toISOString().slice(0, 10);
 }
 
 function occursOn(event: CalendarEvent, dateKey: string) {
@@ -99,6 +120,20 @@ function eventStartMinutes(time: string) {
   return hours * 60 + minutes;
 }
 
+function notificationMinutes(event: CalendarEvent) {
+  const multiplier: Record<NotificationUnit, number> = {
+    minute: 1,
+    hour: 60,
+    day: 1_440,
+    week: 10_080,
+  };
+  return event.notification_value * multiplier[event.notification_unit];
+}
+
+function reminderKind(event: CalendarEvent) {
+  return `event-${event.notification_value}-${event.notification_unit}`;
+}
+
 function formatTime(time: string) {
   const [hours, minutes] = time.slice(0, 5).split(':').map(Number);
   return new Intl.DateTimeFormat('en-US', {
@@ -106,6 +141,17 @@ function formatTime(time: string) {
     minute: '2-digit',
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(2000, 0, 1, hours, minutes)));
+}
+
+function formatOccurrenceDay(occurrenceDate: string, today: string) {
+  if (occurrenceDate === today) return 'today';
+  if (occurrenceDate === addDaysToDateKey(today, 1)) return 'tomorrow';
+  const { year, month, day } = dateParts(occurrenceDate);
+  return `on ${new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month - 1, day)))}`;
 }
 
 Deno.serve(async (request) => {
@@ -203,19 +249,22 @@ Deno.serve(async (request) => {
 
   const scheduledAt = body.scheduled_at ? new Date(body.scheduled_at) : new Date();
   const localClock = getLocalClock(scheduledAt);
+  const lookAheadDate = addDaysToDateKey(localClock.dateKey, 28);
   const [{ data: events, error: eventsError }, { data: subscriptions, error: subscriptionsError }, { data: deliveries, error: deliveriesError }] = await Promise.all([
     loadWithRetry(() => supabase
       .from('calendar_events')
-      .select('id,title,event_date,start_time,participant_ids,repeat_interval,repeat_unit')
-      .lte('event_date', localClock.dateKey)),
+      .select('id,title,event_date,start_time,participant_ids,repeat_interval,repeat_unit,notification_value,notification_unit')
+      .not('notification_value', 'is', null)
+      .not('notification_unit', 'is', null)
+      .lte('event_date', lookAheadDate)),
     loadWithRetry(() => supabase
       .from('push_subscriptions')
       .select('id,endpoint,family_id,p256dh,auth')),
     loadWithRetry(() => supabase
       .from('push_reminder_deliveries')
-      .select('subscription_id,event_id')
-      .eq('occurrence_date', localClock.dateKey)
-      .eq('reminder_kind', REMINDER_KIND)),
+      .select('subscription_id,event_id,occurrence_date,reminder_kind')
+      .gte('occurrence_date', localClock.dateKey)
+      .lte('occurrence_date', lookAheadDate)),
   ]);
 
   if (eventsError || subscriptionsError || deliveriesError) {
@@ -223,26 +272,36 @@ Deno.serve(async (request) => {
     return new Response('Reminder data could not be loaded', { status: 500, headers: CORS_HEADERS });
   }
 
-  const dueEvents = (events as CalendarEvent[]).filter((event) => {
-    if (!occursOn(event, localClock.dateKey)) return false;
-    const minutesUntilStart = eventStartMinutes(event.start_time) - localClock.minutes;
-    // Send near the 30-minute mark, but catch up before the event starts if a
-    // scheduler run failed or the event was created less than 30 minutes ahead.
-    return minutesUntilStart >= 0 && minutesUntilStart <= 34;
-  });
-  if (dueEvents.length === 0 || subscriptions?.length === 0) {
-    return Response.json({ sent: 0, due: dueEvents.length }, { headers: CORS_HEADERS });
+  const dueOccurrences: DueOccurrence[] = [];
+  for (const event of events as CalendarEvent[]) {
+    const leadMinutes = notificationMinutes(event);
+    for (let dayOffset = 0; dayOffset <= 28; dayOffset += 1) {
+      const occurrenceDate = addDaysToDateKey(localClock.dateKey, dayOffset);
+      if (!occursOn(event, occurrenceDate)) continue;
+      const minutesUntilStart = dayOffset * 1_440 + eventStartMinutes(event.start_time) - localClock.minutes;
+      // If the exact scheduler run was missed, or an event was created inside
+      // its selected lead time, catch up once while the event is still ahead.
+      if (minutesUntilStart >= 0 && minutesUntilStart <= leadMinutes + 4) {
+        dueOccurrences.push({ event, occurrenceDate, reminderKind: reminderKind(event) });
+      }
+    }
+  }
+  if (dueOccurrences.length === 0 || subscriptions?.length === 0) {
+    return Response.json({ sent: 0, due: dueOccurrences.length }, { headers: CORS_HEADERS });
   }
 
   const delivered = new Set(
-    (deliveries ?? []).map((delivery) => `${delivery.subscription_id}:${delivery.event_id}`),
+    ((deliveries ?? []) as DeliveryRow[]).map((delivery) => (
+      `${delivery.subscription_id}:${delivery.event_id}:${delivery.occurrence_date}:${delivery.reminder_kind}`
+    )),
   );
   let sent = 0;
 
   for (const subscription of subscriptions as PushSubscriptionRow[]) {
-    for (const event of dueEvents) {
+    for (const occurrence of dueOccurrences) {
+      const { event, occurrenceDate, reminderKind: kind } = occurrence;
       if (!event.participant_ids.includes(subscription.family_id)) continue;
-      const deliveryKey = `${subscription.id}:${event.id}`;
+      const deliveryKey = `${subscription.id}:${event.id}:${occurrenceDate}:${kind}`;
       if (delivered.has(deliveryKey)) continue;
 
       try {
@@ -251,8 +310,8 @@ Deno.serve(async (request) => {
           keys: { p256dh: subscription.p256dh, auth: subscription.auth },
         }, JSON.stringify({
           title: 'Family Calendar',
-          body: `You have ${event.title} today at ${formatTime(event.start_time)}.`,
-          tag: `event-${event.id}-${localClock.dateKey}`,
+          body: `You have ${event.title} ${formatOccurrenceDay(occurrenceDate, localClock.dateKey)} at ${formatTime(event.start_time)}.`,
+          tag: `event-${event.id}-${occurrenceDate}`,
           url: CALENDAR_URL,
         }), { TTL: 3600, urgency: 'high' });
 
@@ -268,8 +327,8 @@ Deno.serve(async (request) => {
           .insert({
             subscription_id: subscription.id,
             event_id: event.id,
-            occurrence_date: localClock.dateKey,
-            reminder_kind: REMINDER_KIND,
+            occurrence_date: occurrenceDate,
+            reminder_kind: kind,
           }));
         if (deliveryError && deliveryError.code !== '23505') console.error(deliveryError);
         delivered.add(deliveryKey);
@@ -287,5 +346,5 @@ Deno.serve(async (request) => {
     }
   }
 
-  return Response.json({ sent, due: dueEvents.length }, { headers: CORS_HEADERS });
+  return Response.json({ sent, due: dueOccurrences.length }, { headers: CORS_HEADERS });
 });

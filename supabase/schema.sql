@@ -14,6 +14,8 @@ create table if not exists public.calendar_events (
   notes text not null default '',
   repeat_interval smallint not null default 0,
   repeat_unit text not null default 'none',
+  notification_value smallint,
+  notification_unit text,
   created_by uuid not null default auth.uid() references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -24,6 +26,19 @@ create table if not exists public.calendar_events (
   constraint calendar_events_valid_repeat check (
     (repeat_unit = 'none' and repeat_interval = 0)
     or (repeat_unit in ('day', 'week', 'month', 'year') and repeat_interval between 1 and 99)
+  ),
+  constraint calendar_events_valid_notification check (
+    (notification_value is null and notification_unit is null)
+    or (
+      notification_value is not null
+      and notification_unit is not null
+      and (
+        (notification_unit = 'minute' and notification_value between 0 and 60)
+        or (notification_unit = 'hour' and notification_value between 0 and 24)
+        or (notification_unit = 'day' and notification_value between 0 and 28)
+        or (notification_unit = 'week' and notification_value between 0 and 4)
+      )
+    )
   )
 );
 
@@ -31,7 +46,9 @@ create table if not exists public.calendar_events (
 alter table public.calendar_events
   add column if not exists location text not null default '',
   add column if not exists repeat_interval smallint not null default 0,
-  add column if not exists repeat_unit text not null default 'none';
+  add column if not exists repeat_unit text not null default 'none',
+  add column if not exists notification_value smallint,
+  add column if not exists notification_unit text;
 
 alter table public.calendar_events
   drop constraint if exists calendar_events_valid_time;
@@ -54,6 +71,24 @@ alter table public.calendar_events
   add constraint calendar_events_valid_repeat check (
     (repeat_unit = 'none' and repeat_interval = 0)
     or (repeat_unit in ('day', 'week', 'month', 'year') and repeat_interval between 1 and 99)
+  );
+
+alter table public.calendar_events
+  drop constraint if exists calendar_events_valid_notification;
+
+alter table public.calendar_events
+  add constraint calendar_events_valid_notification check (
+    (notification_value is null and notification_unit is null)
+    or (
+      notification_value is not null
+      and notification_unit is not null
+      and (
+        (notification_unit = 'minute' and notification_value between 0 and 60)
+        or (notification_unit = 'hour' and notification_value between 0 and 24)
+        or (notification_unit = 'day' and notification_value between 0 and 28)
+        or (notification_unit = 'week' and notification_value between 0 and 4)
+      )
+    )
   );
 
 create or replace function public.set_calendar_event_updated_at()

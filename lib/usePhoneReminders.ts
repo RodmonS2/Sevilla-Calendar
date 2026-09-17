@@ -64,7 +64,7 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
           await saveSubscription(subscription);
           if (!cancelled) {
             setStatus('enabled');
-            setMessage('This phone will receive reminders 30 minutes before your events.');
+            setMessage('This phone is ready for event notifications.');
           }
         } else if (!cancelled) {
           setStatus('ready');
@@ -85,7 +85,7 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
     if (!supportsPushNotifications()) {
       setStatus('unsupported');
       setMessage('This phone does not support web reminders.');
-      return;
+      return false;
     }
     setStatus('checking');
     setMessage('Turning on reminders…');
@@ -94,7 +94,7 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
       if (permission !== 'granted') {
         setStatus('denied');
         setMessage('Reminders were not allowed. You can change this in your phone’s settings.');
-        return;
+        return false;
       }
       const registration = await navigator.serviceWorker.ready;
       const existing = await registration.pushManager.getSubscription();
@@ -104,10 +104,12 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
       });
       await saveSubscription(subscription);
       setStatus('enabled');
-      setMessage('This phone will receive reminders 30 minutes before your events.');
+      setMessage('This phone is ready for event notifications.');
+      return true;
     } catch {
       setStatus('error');
       setMessage('Reminders could not be enabled. Please try again.');
+      return false;
     }
   }, [saveSubscription]);
 
@@ -156,5 +158,6 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
     message,
     toggle: status === 'enabled' ? disable : enable,
     test,
+    enable,
   };
 }
