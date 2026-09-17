@@ -24,6 +24,22 @@ type PushSubscriptionRow = {
 const TIME_ZONE = 'America/Vancouver';
 const REMINDER_KIND = '30-minute';
 const CALENDAR_URL = 'https://rodmo-family-calendar.sliph320.chatgpt.site/';
+const QUERY_RETRY_DELAYS_MS = [0, 350, 1000];
+
+type DatabaseResult<T> = {
+  data: T | null;
+  error: { code?: string; message?: string } | null;
+};
+
+async function loadWithRetry<T>(load: () => PromiseLike<DatabaseResult<T>>) {
+  let result: DatabaseResult<T> | null = null;
+  for (const delay of QUERY_RETRY_DELAYS_MS) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    result = await load();
+    if (!result.error) return result;
+  }
+  return result as DatabaseResult<T>;
+}
 
 function dateParts(dateKey: string) {
   const [year, month, day] = dateKey.split('-').map(Number);
@@ -112,18 +128,18 @@ Deno.serve(async (request) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const [{ data: events, error: eventsError }, { data: subscriptions, error: subscriptionsError }, { data: deliveries, error: deliveriesError }] = await Promise.all([
-    supabase
+    loadWithRetry(() => supabase
       .from('calendar_events')
       .select('id,title,event_date,start_time,participant_ids,repeat_interval,repeat_unit')
-      .lte('event_date', localClock.dateKey),
-    supabase
+      .lte('event_date', localClock.dateKey)),
+    loadWithRetry(() => supabase
       .from('push_subscriptions')
-      .select('id,endpoint,family_id,p256dh,auth'),
-    supabase
+      .select('id,endpoint,family_id,p256dh,auth')),
+    loadWithRetry(() => supabase
       .from('push_reminder_deliveries')
       .select('subscription_id,event_id')
       .eq('occurrence_date', localClock.dateKey)
-      .eq('reminder_kind', REMINDER_KIND),
+      .eq('reminder_kind', REMINDER_KIND)),
   ]);
 
   if (eventsError || subscriptionsError || deliveriesError) {
@@ -134,7 +150,9 @@ Deno.serve(async (request) => {
   const dueEvents = (events as CalendarEvent[]).filter((event) => {
     if (!occursOn(event, localClock.dateKey)) return false;
     const minutesUntilStart = eventStartMinutes(event.start_time) - localClock.minutes;
-    return minutesUntilStart >= 25 && minutesUntilStart <= 34;
+    // Send near the 30-minute mark, but catch up before the event starts if a
+    // scheduler run failed or the event was created less than 30 minutes ahead.
+    return minutesUntilStart >= 0 && minutesUntilStart <= 34;
   });
   if (dueEvents.length === 0 || subscriptions?.length === 0) {
     return Response.json({ sent: 0, due: dueEvents.length });
@@ -153,7 +171,7 @@ Deno.serve(async (request) => {
       if (delivered.has(deliveryKey)) continue;
 
       try {
-        await webpush.sendNotification({
+        const pushResponse = await webpush.sendNotification({
           endpoint: subscription.endpoint,
           keys: { p256dh: subscription.p256dh, auth: subscription.auth },
         }, JSON.stringify({
@@ -161,14 +179,23 @@ Deno.serve(async (request) => {
           body: `You have ${event.title} today at ${formatTime(event.start_time)}.`,
           tag: `event-${event.id}-${localClock.dateKey}`,
           url: CALENDAR_URL,
-        }), { TTL: 3600, urgency: 'normal' });
+        }), { TTL: 3600, urgency: 'high' });
 
-        const { error: deliveryError } = await supabase.from('push_reminder_deliveries').insert({
-          subscription_id: subscription.id,
-          event_id: event.id,
-          occurrence_date: localClock.dateKey,
-          reminder_kind: REMINDER_KIND,
+        console.log({
+          message: 'Push reminder accepted',
+          statusCode: pushResponse.statusCode,
+          eventId: event.id,
+          subscriptionId: subscription.id,
         });
+
+        const { error: deliveryError } = await loadWithRetry(() => supabase
+          .from('push_reminder_deliveries')
+          .insert({
+            subscription_id: subscription.id,
+            event_id: event.id,
+            occurrence_date: localClock.dateKey,
+            reminder_kind: REMINDER_KIND,
+          }));
         if (deliveryError && deliveryError.code !== '23505') console.error(deliveryError);
         delivered.add(deliveryKey);
         sent += 1;

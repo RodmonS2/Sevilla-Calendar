@@ -192,7 +192,7 @@ function fromDatabaseEvent(event: DatabaseCalendarEvent): CalendarEvent {
   };
 }
 
-function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, reminderMessage, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday, onToggleReminders }: {
+function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, reminderMessage, onViewModeChange, onToggleFamily, onSelectMonth, onSelectYear, onToday, onToggleReminders, onTestReminders }: {
   viewMode: CalendarViewMode;
   anchorDate: Date;
   activeIds: Set<string>;
@@ -204,6 +204,7 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, remin
   onSelectYear: (year: number) => void;
   onToday: () => void;
   onToggleReminders: () => void;
+  onTestReminders: () => void;
 }) {
   const [openPicker, setOpenPicker] = useState<'view' | 'month' | 'year' | null>(null);
   const headerRef = useRef<HTMLElement>(null);
@@ -267,6 +268,11 @@ function CalendarHeader({ viewMode, anchorDate, activeIds, reminderStatus, remin
               <span>{reminderStatus === 'enabled' ? 'Reminders on' : reminderStatus === 'checking' ? 'Checking reminders…' : 'Enable reminders'}</span>
               <i aria-hidden="true">{reminderStatus === 'enabled' ? '✓' : ''}</i>
             </button>
+            {reminderStatus === 'enabled' && (
+              <button type="button" role="menuitem" onClick={onTestReminders}>
+                <span>Send test notification</span>
+              </button>
+            )}
             {reminderMessage && <span className="reminder-message" role="status">{reminderMessage}</span>}
           </div>
         )}
@@ -1118,6 +1124,7 @@ export default function FamilyCalendar() {
           setAnchorDate(currentDate);
         }}
         onToggleReminders={() => { void phoneReminders.toggle(); }}
+        onTestReminders={() => { void phoneReminders.test(); }}
       />
       {(dataError || (eventsLoading && events.length === 0)) && (
         <div className={`sync-banner ${dataError ? 'error' : ''}`} role="status">

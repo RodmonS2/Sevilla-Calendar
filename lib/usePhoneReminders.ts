@@ -129,9 +129,34 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
     }
   }, []);
 
+  const test = useCallback(async () => {
+    setMessage('Sending a test notification…');
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (Notification.permission !== 'granted' || !subscription) {
+        setStatus('ready');
+        setMessage('Enable reminders before sending a test notification.');
+        return;
+      }
+      await saveSubscription(subscription);
+      await registration.showNotification('Family Calendar', {
+        body: 'Test successful — this phone can display calendar reminders.',
+        icon: '/icons/icon-192.png',
+        badge: '/icons/badge-96.png',
+        tag: `family-calendar-test-${Date.now()}`,
+        data: { url: '/' },
+      });
+      setMessage('Test sent. It should appear on this phone now.');
+    } catch {
+      setMessage('The test notification could not be displayed. Check this app in iPhone notification settings.');
+    }
+  }, [saveSubscription]);
+
   return {
     status,
     message,
     toggle: status === 'enabled' ? disable : enable,
+    test,
   };
 }
