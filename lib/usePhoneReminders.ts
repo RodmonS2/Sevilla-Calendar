@@ -130,7 +130,7 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
   }, []);
 
   const test = useCallback(async () => {
-    setMessage('Sending a test notification…');
+    setMessage('Test arrives in about 10 seconds. Close the app now.');
     try {
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
@@ -140,16 +140,14 @@ export function usePhoneReminders(userId: string, familyId: 'mom' | 'dad' | '') 
         return;
       }
       await saveSubscription(subscription);
-      await registration.showNotification('Family Calendar', {
-        body: 'Test successful — this phone can display calendar reminders.',
-        icon: '/icons/icon-192.png',
-        badge: '/icons/badge-96.png',
-        tag: `family-calendar-test-${Date.now()}`,
-        data: { url: '/' },
+      if (!supabase) throw new Error('Reminder service unavailable');
+      const { data, error } = await supabase.functions.invoke('send-daily-reminders', {
+        body: { action: 'test' },
       });
-      setMessage('Test sent. It should appear on this phone now.');
+      if (error || !data || data.sent < 1) throw error ?? new Error('No test notification was sent');
+      setMessage('Test sent. Check Notification Center if no banner appeared.');
     } catch {
-      setMessage('The test notification could not be displayed. Check this app in iPhone notification settings.');
+      setMessage('The server could not send the test. Keep reminders enabled and try again.');
     }
   }, [saveSubscription]);
 

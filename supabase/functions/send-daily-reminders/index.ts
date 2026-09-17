@@ -16,6 +16,7 @@ type CalendarEvent = {
 type PushSubscriptionRow = {
   id: string;
   endpoint: string;
+  user_id?: string;
   family_id: 'mom' | 'dad';
   p256dh: string;
   auth: string;
@@ -25,6 +26,12 @@ const TIME_ZONE = 'America/Vancouver';
 const REMINDER_KIND = '30-minute';
 const CALENDAR_URL = 'https://rodmo-family-calendar.sliph320.chatgpt.site/';
 const QUERY_RETRY_DELAYS_MS = [0, 350, 1000];
+const TEST_NOTIFICATION_DELAY_MS = 8000;
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
 
 type DatabaseResult<T> = {
   data: T | null;
@@ -102,9 +109,7 @@ function formatTime(time: string) {
 }
 
 Deno.serve(async (request) => {
-  if (request.headers.get('x-cron-secret') !== Deno.env.get('CRON_SECRET')) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -112,21 +117,92 @@ Deno.serve(async (request) => {
   const privateKey = Deno.env.get('VAPID_PRIVATE_KEY');
   const subject = Deno.env.get('VAPID_SUBJECT');
   if (!supabaseUrl || !serviceRoleKey || !publicKey || !privateKey || !subject) {
-    return new Response('Reminder service is not configured', { status: 500 });
+    return new Response('Reminder service is not configured', { status: 500, headers: CORS_HEADERS });
   }
 
-  let scheduledAt = new Date();
+  let body: { action?: string; scheduled_at?: string } = {};
   try {
-    const body = await request.json();
-    if (body?.scheduled_at) scheduledAt = new Date(body.scheduled_at);
+    body = await request.json();
   } catch {
     // Manual calls may omit a body.
   }
 
-  const localClock = getLocalClock(scheduledAt);
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  webpush.setVapidDetails(subject, publicKey, privateKey);
+
+  const cronAuthorized = request.headers.get('x-cron-secret') === Deno.env.get('CRON_SECRET');
+  if (!cronAuthorized && body.action === 'test') {
+    const accessToken = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+    const { data: { user }, error: userError } = accessToken
+      ? await supabase.auth.getUser(accessToken)
+      : { data: { user: null }, error: new Error('Missing access token') };
+    if (userError || !user) {
+      return new Response('Unauthorized', { status: 401, headers: CORS_HEADERS });
+    }
+
+    const { data: testSubscriptions, error: testSubscriptionsError } = await loadWithRetry(() => supabase
+      .from('push_subscriptions')
+      .select('id,endpoint,user_id,family_id,p256dh,auth')
+      .eq('user_id', user.id));
+    if (testSubscriptionsError) {
+      console.error({ testSubscriptionsError });
+      return new Response('Test notification could not be prepared', { status: 500, headers: CORS_HEADERS });
+    }
+    if (!testSubscriptions?.length) {
+      return Response.json({ sent: 0, failed: 0, reason: 'No phone subscription' }, {
+        status: 409,
+        headers: CORS_HEADERS,
+      });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, TEST_NOTIFICATION_DELAY_MS));
+    let sent = 0;
+    let failed = 0;
+    for (const subscription of testSubscriptions as PushSubscriptionRow[]) {
+      try {
+        const pushResponse = await webpush.sendNotification({
+          endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+        }, JSON.stringify({
+          title: 'Family Calendar',
+          body: 'Test successful — this phone can receive calendar reminders.',
+          tag: `family-calendar-test-${Date.now()}`,
+          url: CALENDAR_URL,
+        }), { TTL: 300, urgency: 'high' });
+        console.log({
+          message: 'Test push accepted',
+          statusCode: pushResponse.statusCode,
+          subscriptionId: subscription.id,
+          userId: user.id,
+        });
+        sent += 1;
+      } catch (error) {
+        failed += 1;
+        const statusCode = typeof error === 'object' && error && 'statusCode' in error
+          ? Number(error.statusCode)
+          : 0;
+        if (statusCode === 404 || statusCode === 410) {
+          await supabase.from('push_subscriptions').delete().eq('id', subscription.id);
+        } else {
+          console.error(error);
+        }
+      }
+    }
+
+    return Response.json({ sent, failed }, {
+      status: sent > 0 ? 200 : 502,
+      headers: CORS_HEADERS,
+    });
+  }
+
+  if (!cronAuthorized) {
+    return new Response('Unauthorized', { status: 401, headers: CORS_HEADERS });
+  }
+
+  const scheduledAt = body.scheduled_at ? new Date(body.scheduled_at) : new Date();
+  const localClock = getLocalClock(scheduledAt);
   const [{ data: events, error: eventsError }, { data: subscriptions, error: subscriptionsError }, { data: deliveries, error: deliveriesError }] = await Promise.all([
     loadWithRetry(() => supabase
       .from('calendar_events')
@@ -144,7 +220,7 @@ Deno.serve(async (request) => {
 
   if (eventsError || subscriptionsError || deliveriesError) {
     console.error({ eventsError, subscriptionsError, deliveriesError });
-    return new Response('Reminder data could not be loaded', { status: 500 });
+    return new Response('Reminder data could not be loaded', { status: 500, headers: CORS_HEADERS });
   }
 
   const dueEvents = (events as CalendarEvent[]).filter((event) => {
@@ -155,10 +231,9 @@ Deno.serve(async (request) => {
     return minutesUntilStart >= 0 && minutesUntilStart <= 34;
   });
   if (dueEvents.length === 0 || subscriptions?.length === 0) {
-    return Response.json({ sent: 0, due: dueEvents.length });
+    return Response.json({ sent: 0, due: dueEvents.length }, { headers: CORS_HEADERS });
   }
 
-  webpush.setVapidDetails(subject, publicKey, privateKey);
   const delivered = new Set(
     (deliveries ?? []).map((delivery) => `${delivery.subscription_id}:${delivery.event_id}`),
   );
@@ -212,5 +287,5 @@ Deno.serve(async (request) => {
     }
   }
 
-  return Response.json({ sent, due: dueEvents.length });
+  return Response.json({ sent, due: dueEvents.length }, { headers: CORS_HEADERS });
 });
